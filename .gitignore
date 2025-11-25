@@ -43,4 +43,8 @@ htmlcov/
 output.json
 *.log
 z21_new.z21
+z21_new_output.json
+
+# macOS
+.DS_Store
 

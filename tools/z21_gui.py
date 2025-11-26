@@ -14,6 +14,17 @@ import tempfile
 import zipfile
 import sqlite3
 import uuid
+import subprocess
+import platform
+import os
+
+# Try to import PyObjC for macOS sharing
+try:
+    from AppKit import NSSharingService, NSURL, NSArray, NSWorkspace
+    from Foundation import NSFileManager
+    HAS_PYOBJC = True
+except ImportError:
+    HAS_PYOBJC = False
 
 try:
     from PIL import Image, ImageTk
@@ -623,6 +634,11 @@ class Z21GUI:
                                         text="Export Z21 Loco",
                                         command=self.export_z21_loco)
         self.export_button.pack(side=tk.LEFT, padx=5)
+        
+        self.share_button = ttk.Button(button_frame,
+                                       text="Share with WIFI",
+                                       command=self.share_with_airdrop)
+        self.share_button.pack(side=tk.LEFT, padx=5)
 
         self.scan_button = ttk.Button(button_frame,
                                       text="Scan for Details",
@@ -2292,6 +2308,389 @@ Be accurate and extract all visible functions."""
         except Exception as e:
             messagebox.showerror("Export Error",
                                  f"Failed to export locomotive: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def share_with_airdrop(self):
+        """Share z21loco file via AirDrop using NSSharingService (macOS)."""
+        if not self.current_loco or not self.z21_data or not self.parser:
+            messagebox.showerror("Error",
+                                 "No locomotive selected or data not loaded.")
+            return
+
+        # Check if PyObjC is available (macOS only)
+        if platform.system() != 'Darwin':
+            messagebox.showerror("Error",
+                                 "AirDrop sharing is only available on macOS.")
+            return
+
+        if not HAS_PYOBJC:
+            messagebox.showerror(
+                "Error",
+                "PyObjC is required for AirDrop sharing.\n\n"
+                "Please install it with:\n"
+                "pip install pyobjc-framework-AppKit"
+            )
+            return
+
+        try:
+            # Create temporary file for sharing (NSSharingService requires a file path)
+            # Use a descriptive filename based on locomotive name
+            loco_name = self.current_loco.name.replace('/', '_').replace('\\', '_')
+            if not loco_name:
+                loco_name = f"locomotive_{self.current_loco.address}"
+            
+            # Create temporary file in system temp directory
+            temp_dir = tempfile.gettempdir()
+            temp_filename = f"{loco_name}_{uuid.uuid4().hex[:8]}.z21loco"
+            output_path = Path(temp_dir) / temp_filename
+            
+            # Use the existing export_z21_loco logic but without showing success message
+            # We'll call the export logic directly
+            import shutil
+
+            # Generate UUID for export directory
+            export_uuid = str(uuid.uuid4()).upper()
+            export_dir = f"export/{export_uuid}"
+
+            # Create temporary directory for export
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                export_path = temp_path / export_dir
+                export_path.mkdir(parents=True, exist_ok=True)
+
+                # Get original SQLite database to copy structure
+                with zipfile.ZipFile(self.z21_file, 'r') as input_zip:
+                    sqlite_files = [
+                        f for f in input_zip.namelist()
+                        if f.endswith('.sqlite')
+                    ]
+                    if not sqlite_files:
+                        messagebox.showerror(
+                            "Error",
+                            "No SQLite database found in source file.")
+                        return
+
+                    sqlite_file = sqlite_files[0]
+                    sqlite_data = input_zip.read(sqlite_file)
+
+                    # Extract to temporary file
+                    with tempfile.NamedTemporaryFile(delete=False,
+                                                     suffix='.sqlite') as tmp:
+                        tmp.write(sqlite_data)
+                        source_db_path = tmp.name
+
+                    try:
+                        # Connect to source database
+                        source_db = sqlite3.connect(source_db_path)
+                        source_db.row_factory = sqlite3.Row
+                        source_cursor = source_db.cursor()
+
+                        # Create new database for single locomotive
+                        new_db_path = export_path / "Loco.sqlite"
+                        new_db = sqlite3.connect(str(new_db_path))
+                        new_cursor = new_db.cursor()
+
+                        # Copy all table schemas from source database
+                        source_cursor.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                        tables = [row[0] for row in source_cursor.fetchall()]
+
+                        for table in tables:
+                            source_cursor.execute(
+                                f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'"
+                            )
+                            create_sql = source_cursor.fetchone()
+                            if create_sql and create_sql[0]:
+                                new_cursor.execute(create_sql[0])
+
+                        # Copy update_history if exists
+                        if 'update_history' in tables:
+                            source_cursor.execute(
+                                "SELECT * FROM update_history")
+                            for row in source_cursor.fetchall():
+                                columns = ', '.join(row.keys())
+                                placeholders = ', '.join(['?' for _ in row])
+                                values = tuple(row)
+                                new_cursor.execute(
+                                    f"INSERT INTO update_history ({columns}) VALUES ({placeholders})",
+                                    values)
+
+                        # Get vehicle ID for current locomotive
+                        vehicle_id = getattr(self.current_loco, '_vehicle_id',
+                                             None)
+                        if not vehicle_id:
+                            source_cursor.execute(
+                                "SELECT id FROM vehicles WHERE type = 0 AND address = ?",
+                                (self.current_loco.address, ))
+                            row = source_cursor.fetchone()
+                            if row:
+                                vehicle_id = row['id']
+
+                        if vehicle_id:
+                            # Copy vehicle data
+                            source_cursor.execute(
+                                "SELECT * FROM vehicles WHERE id = ?",
+                                (vehicle_id, ))
+                            vehicle_row = source_cursor.fetchone()
+                            if vehicle_row:
+                                columns = ', '.join(vehicle_row.keys())
+                                placeholders = ', '.join(
+                                    ['?' for _ in vehicle_row])
+                                values = tuple(vehicle_row)
+                                new_cursor.execute(
+                                    f"INSERT INTO vehicles ({columns}) VALUES ({placeholders})",
+                                    values)
+
+                                # Export all functions from memory
+                                if 'functions' in tables:
+                                    source_cursor.execute(
+                                        "PRAGMA table_info(functions)")
+                                    func_columns_info = source_cursor.fetchall()
+                                    func_column_names = [
+                                        col[1] for col in func_columns_info
+                                    ]
+
+                                    source_cursor.execute(
+                                        "SELECT * FROM functions LIMIT 1")
+                                    sample_func = source_cursor.fetchone()
+                                    if sample_func:
+                                        all_func_columns = list(
+                                            sample_func.keys())
+                                    else:
+                                        all_func_columns = func_column_names
+
+                                    new_cursor.execute(
+                                        "SELECT MAX(id) FROM functions")
+                                    max_id_result = new_cursor.fetchone()
+                                    next_id = (
+                                        max_id_result[0] + 1
+                                    ) if max_id_result[0] is not None else 1
+
+                                    new_cursor.execute(
+                                        "DELETE FROM functions WHERE vehicle_id = ?",
+                                        (vehicle_id, ))
+
+                                    if self.current_loco and self.current_loco.function_details:
+                                        for func_num, func_info in self.current_loco.function_details.items():
+                                            func_values = []
+
+                                            for col in all_func_columns:
+                                                if col == 'id':
+                                                    func_values.append(next_id)
+                                                    next_id += 1
+                                                elif col == 'vehicle_id':
+                                                    func_values.append(vehicle_id)
+                                                elif col == 'function':
+                                                    func_values.append(func_num)
+                                                elif col == 'position':
+                                                    func_values.append(func_info.position)
+                                                elif col == 'shortcut':
+                                                    func_values.append(func_info.shortcut or '')
+                                                elif col == 'time':
+                                                    source_cursor.execute(
+                                                        "SELECT time FROM functions WHERE vehicle_id = ? AND function = ? LIMIT 1",
+                                                        (vehicle_id, func_num))
+                                                    orig_time_row = source_cursor.fetchone()
+
+                                                    if orig_time_row and orig_time_row[0] is not None:
+                                                        orig_time_str = str(orig_time_row[0])
+                                                        try:
+                                                            time_float = float(orig_time_str)
+                                                            if time_float == 0:
+                                                                func_values.append('0.000000')
+                                                            else:
+                                                                func_values.append(orig_time_str)
+                                                        except (ValueError, TypeError):
+                                                            func_values.append('0.000000')
+                                                    else:
+                                                        time_val = func_info.time or '0'
+                                                        try:
+                                                            time_float = float(time_val)
+                                                            if time_float == 0:
+                                                                func_values.append('0.000000')
+                                                            else:
+                                                                func_values.append(str(time_val))
+                                                        except (ValueError, TypeError):
+                                                            func_values.append('0')
+                                                elif col == 'image_name':
+                                                    func_values.append(func_info.image_name or '')
+                                                elif col == 'button_type':
+                                                    func_values.append(func_info.button_type)
+                                                elif col == 'is_configured':
+                                                    func_values.append(0)
+                                                elif col == 'show_function_number':
+                                                    func_values.append(1)
+                                                else:
+                                                    func_values.append(None)
+
+                                            try:
+                                                new_cursor.execute(
+                                                    f"INSERT INTO functions ({', '.join(all_func_columns)}) VALUES ({', '.join(['?' for _ in all_func_columns])})",
+                                                    tuple(func_values))
+                                            except Exception as e:
+                                                print(f"Error inserting function {func_num}: {e}")
+
+                        new_db.commit()
+                        new_db.close()
+                        source_db.close()
+
+                        # Set text encoding to UTF-16le (16) for Z21 APP compatibility
+                        with open(new_db_path, 'rb') as f:
+                            sqlite_data = bytearray(f.read())
+                        sqlite_data[60:64] = (16).to_bytes(4, 'big')
+                        with open(new_db_path, 'wb') as f:
+                            f.write(sqlite_data)
+
+                        # Copy locomotive image if exists
+                        if self.current_loco.image_name:
+                            for filename in input_zip.namelist():
+                                if self.current_loco.image_name in filename or filename.endswith(
+                                        f"lok_{self.current_loco.address}.png"):
+                                    image_data = input_zip.read(filename)
+                                    if filename.endswith('.png'):
+                                        image_filename = filename.split('/')[-1]
+                                    else:
+                                        image_filename = f"lok_{self.current_loco.address}.png"
+                                    (export_path / image_filename).write_bytes(image_data)
+                                    break
+
+                        # Create ZIP file
+                        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as output_zip:
+                            output_zip.write(new_db_path, f"{export_dir}/Loco.sqlite")
+                            if self.current_loco.image_name:
+                                for img_file in export_path.glob("*.png"):
+                                    output_zip.write(img_file, f"{export_dir}/{img_file.name}")
+
+                    finally:
+                        Path(source_db_path).unlink()
+
+            # Share file via NSSharingService (AirDrop)
+            try:
+                # Convert Path to NSURL
+                file_path_str = str(output_path.absolute())
+                file_url = NSURL.fileURLWithPath_(file_path_str)
+                
+                # Create NSArray with file URL for sharing
+                file_array = NSArray.arrayWithObject_(file_url)
+                
+                # Get AirDrop sharing service
+                # AirDrop service may fail for several reasons:
+                # 1. AirDrop is disabled in System Settings
+                # 2. Bluetooth/WiFi is turned off
+                # 3. The service name is incorrect for this macOS version
+                # 4. AirDrop is not available (older macOS versions)
+                
+                sharing_service = None
+                
+                # Method 1: Try with the standard AirDrop service name
+                try:
+                    sharing_service = NSSharingService.sharingServiceNamed_(
+                        'com.apple.share.AirDrop'
+                    )
+                    if sharing_service:
+                        print(f"✓ Found AirDrop service via name: {sharing_service.title()}")
+                except Exception as e:
+                    print(f"✗ Method 1 failed: {e}")
+                
+                # Method 2: If that fails, try to find AirDrop from available services
+                # This is more reliable as it queries what services are actually available
+                if not sharing_service:
+                    try:
+                        # Get all available sharing services for the file
+                        available_services = NSSharingService.sharingServicesForItems_(file_array)
+                        print(f"Available sharing services: {[s.title() for s in available_services]}")
+                        
+                        for service in available_services:
+                            # Check if this is AirDrop by title or identifier
+                            service_title = service.title()
+                            if 'AirDrop' in service_title or 'airdrop' in service_title.lower():
+                                sharing_service = service
+                                print(f"✓ Found AirDrop service via available services: {service_title}")
+                                break
+                    except Exception as e:
+                        print(f"✗ Method 2 failed: {e}")
+                
+                # Method 3: Try alternative service name (for older macOS versions)
+                if not sharing_service:
+                    try:
+                        # Some macOS versions use different identifiers
+                        sharing_service = NSSharingService.sharingServiceNamed_(
+                            'NSSharingServiceNameAirDrop'
+                        )
+                        if sharing_service:
+                            print(f"✓ Found AirDrop service via alternative name")
+                    except Exception as e:
+                        print(f"✗ Method 3 failed: {e}")
+                
+                if sharing_service:
+                    # Check if sharing service can perform with items
+                    if sharing_service.canPerformWithItems_(file_array):
+                        # Perform sharing - this will open the AirDrop share dialog
+                        sharing_service.performWithItems_(file_array)
+                        
+                    else:
+                        # Fallback: open AirDrop window and show file
+                        subprocess.run(['open', 'airdrop://'], check=False)
+                        subprocess.run(['open', '-R', file_path_str], check=True)
+                        messagebox.showinfo(
+                            "Share with AirDrop",
+                            f"File exported to:\n{output_path}\n\n"
+                            "AirDrop window opened. Drag the file to share."
+                        )
+                else:
+                    # AirDrop service not available - possible reasons:
+                    # 1. AirDrop is disabled in System Settings > General > AirDrop
+                    # 2. Bluetooth/WiFi is turned off
+                    # 3. macOS version doesn't support AirDrop sharing service
+                    # 4. AirDrop is not available on this Mac
+                    
+                    print("⚠ AirDrop sharing service not available")
+                    print("  Possible reasons:")
+                    print("  1. AirDrop is disabled in System Settings")
+                    print("  2. Bluetooth/WiFi is turned off")
+                    print("  3. AirDrop not available on this Mac")
+                    
+                    # Fallback: open AirDrop window and show file
+                    subprocess.run(['open', 'airdrop://'], check=False)
+                    subprocess.run(['open', '-R', file_path_str], check=True)
+                    messagebox.showwarning(
+                        "AirDrop Service Not Available",
+                        f"File exported to:\n{output_path}\n\n"
+                        "AirDrop sharing service is not available.\n\n"
+                        "Possible reasons:\n"
+                        "• AirDrop is disabled in System Settings\n"
+                        "• Bluetooth/WiFi is turned off\n"
+                        "• AirDrop not available on this Mac\n\n"
+                        "AirDrop window opened. Please drag the file manually to share."
+                    )
+                    
+            except Exception as e:
+                # Fallback: show file in Finder
+                try:
+                    subprocess.run(['open', '-R', str(output_path)], check=True)
+                    subprocess.run(['open', 'airdrop://'], check=False)
+                    messagebox.showinfo(
+                        "File Ready",
+                        f"File exported to:\n{output_path}\n\n"
+                        "File shown in Finder. Drag to AirDrop to share."
+                    )
+                except Exception as e2:
+                    messagebox.showinfo(
+                        "Export Complete",
+                        f"File exported to:\n{output_path}\n\n"
+                        "Please manually share this file via AirDrop."
+                    )
+            finally:
+                # Note: We don't delete the temp file immediately because
+                # AirDrop sharing happens asynchronously. The file will be cleaned up
+                # by the system's temp file cleanup, or we could add a cleanup mechanism later.
+                pass
+
+        except Exception as e:
+            messagebox.showerror("Share Error",
+                                 f"Failed to share locomotive: {e}")
             import traceback
             traceback.print_exc()
 

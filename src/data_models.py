@@ -60,6 +60,7 @@ class Locomotive:
     speed_display: int = 0  # Speed display setting: 0=km/h, 1=Regulation Step, 2=mph
     categories: List[str] = field(default_factory=list)  # Category names
     crane: bool = False  # Crane function flag
+    in_stock_since: str = ""  # Date when locomotive was added to stock
     regulation_step: int = 0  # Regulation step from traction_list
     rail_vehicle_type: int = 0  # Rail vehicle type: 0=Loco, 1=Wagon, 2=Accessory
     

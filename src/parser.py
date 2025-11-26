@@ -107,14 +107,31 @@ class Z21Parser:
             if version_row and version_row['version']:
                 z21_file.version = version_row['version']
             
-            # Parse locomotives from vehicles table (type=0 means locomotive)
-            # Also include type field to read rail_vehicle_type
-            cursor.execute("""
-                SELECT id, name, address, max_speed, active, traction_direction, 
-                       image_name, drivers_cab, description, full_name, railway,
-                       article_number, decoder_type, build_year, buffer_lenght,
-                       model_buffer_lenght, service_weight, model_weight, rmin, ip,
-                       speed_display, type
+            # Check if 'in_stock_since' field exists in vehicles table
+            cursor.execute("PRAGMA table_info(vehicles)")
+            columns = [row[1] for row in cursor.fetchall()]
+            has_in_stock_since = 'in_stock_since' in columns or 'inStockSince' in columns
+            
+            # Build SELECT query dynamically based on available columns
+            base_fields = [
+                'id', 'name', 'address', 'max_speed', 'active', 'traction_direction', 
+                'image_name', 'drivers_cab', 'description', 'full_name', 'railway',
+                'article_number', 'decoder_type', 'build_year', 'buffer_lenght',
+                'model_buffer_lenght', 'service_weight', 'model_weight', 'rmin', 'ip',
+                'speed_display', 'type'
+            ]
+            
+            # Add in_stock_since if it exists (try different possible column names)
+            in_stock_since_field = None
+            for field_name in ['in_stock_since', 'inStockSince', 'in_stock_since_date']:
+                if field_name in columns:
+                    in_stock_since_field = field_name
+                    base_fields.append(field_name)
+                    break
+            
+            fields_str = ', '.join(base_fields)
+            cursor.execute(f"""
+                SELECT {fields_str}
                 FROM vehicles 
                 WHERE type = 0
                 ORDER BY position
@@ -150,6 +167,15 @@ class Z21Parser:
                 loco.active = bool(vehicle['active'] if vehicle['active'] is not None else 1)
                 loco.speed_display = vehicle['speed_display'] if vehicle['speed_display'] is not None else 0
                 loco.rail_vehicle_type = vehicle['type'] if vehicle['type'] is not None else 0
+                
+                # Extract in_stock_since if field exists
+                if in_stock_since_field:
+                    try:
+                        loco.in_stock_since = vehicle[in_stock_since_field] or ''
+                    except (KeyError, IndexError):
+                        loco.in_stock_since = ''
+                else:
+                    loco.in_stock_since = ''
                 
                 # Parse categories for this vehicle
                 cursor.execute("""
@@ -421,16 +447,24 @@ class Z21Parser:
                         vehicle_id = vehicle_row['id']
                 
                 if vehicle_id:
-                    # Update vehicle fields including additional fields
-                    cursor.execute("""
-                        UPDATE vehicles 
-                        SET name = ?, address = ?, max_speed = ?, traction_direction = ?,
-                            full_name = ?, railway = ?, article_number = ?, decoder_type = ?,
-                            build_year = ?, model_buffer_lenght = ?, service_weight = ?,
-                            model_weight = ?, rmin = ?, ip = ?, drivers_cab = ?, description = ?,
-                            active = ?, speed_display = ?, type = ?
-                        WHERE id = ?
-                    """, (
+                    # Check if in_stock_since field exists in database
+                    cursor.execute("PRAGMA table_info(vehicles)")
+                    columns = [row[1] for row in cursor.fetchall()]
+                    in_stock_since_field = None
+                    for field_name in ['in_stock_since', 'inStockSince', 'in_stock_since_date']:
+                        if field_name in columns:
+                            in_stock_since_field = field_name
+                            break
+                    
+                    # Build UPDATE query dynamically
+                    base_update_fields = [
+                        'name = ?', 'address = ?', 'max_speed = ?', 'traction_direction = ?',
+                        'full_name = ?', 'railway = ?', 'article_number = ?', 'decoder_type = ?',
+                        'build_year = ?', 'model_buffer_lenght = ?', 'service_weight = ?',
+                        'model_weight = ?', 'rmin = ?', 'ip = ?', 'drivers_cab = ?', 'description = ?',
+                        'active = ?', 'speed_display = ?', 'type = ?'
+                    ]
+                    base_values = [
                         loco.name,
                         loco.address,
                         loco.speed,
@@ -450,8 +484,21 @@ class Z21Parser:
                         1 if loco.active else 0,
                         loco.speed_display or 0,
                         loco.rail_vehicle_type or 0,
-                        vehicle_id
-                    ))
+                    ]
+                    
+                    # Add in_stock_since if field exists
+                    if in_stock_since_field:
+                        base_update_fields.append(f'{in_stock_since_field} = ?')
+                        base_values.append(getattr(loco, 'in_stock_since', '') or None)
+                    
+                    base_values.append(vehicle_id)
+                    
+                    update_query = f"""
+                        UPDATE vehicles 
+                        SET {', '.join(base_update_fields)}
+                        WHERE id = ?
+                    """
+                    cursor.execute(update_query, tuple(base_values))
                     # Update stored vehicle ID in case it changed
                     loco._vehicle_id = vehicle_id  # type: ignore
                     

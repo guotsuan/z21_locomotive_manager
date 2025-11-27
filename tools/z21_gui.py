@@ -32,6 +32,36 @@ try:
 except ImportError:
     HAS_PIL = False
 
+# Try to import PaddleOCR
+# Fix OpenMP library conflict on macOS (must be set before importing PaddleOCR)
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+# Allow disabling PaddleOCR via environment variable (useful if it causes crashes)
+DISABLE_PADDLEOCR = os.environ.get('DISABLE_PADDLEOCR',
+                                   '').lower() in ('1', 'true', 'yes')
+
+try:
+    if DISABLE_PADDLEOCR:
+        print(
+            "PaddleOCR is disabled via DISABLE_PADDLEOCR environment variable")
+        HAS_PADDLEOCR = False
+    else:
+        from paddleocr import PaddleOCR
+        # Try to initialize to check if all dependencies are available
+        # Don't actually create an OCR instance, just check if import works
+        HAS_PADDLEOCR = True
+except (ImportError, ModuleNotFoundError) as e:
+    # PaddleOCR or its dependencies (like paddle) are not installed
+    HAS_PADDLEOCR = False
+    # Don't print error here, will be handled when actually trying to use it
+except Exception as e:
+    # Other errors during import (e.g., segmentation fault during import)
+    print(f"Warning: PaddleOCR import failed: {e}")
+    print(
+        "If you see segmentation fault errors, set DISABLE_PADDLEOCR=1 to disable PaddleOCR"
+    )
+    HAS_PADDLEOCR = False
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -53,6 +83,8 @@ class Z21GUI:
             int] = None  # Index in z21_data.locomotives
         self.original_loco_address: Optional[
             int] = None  # Store original address for database lookup
+        self.user_selected_loco: Optional[
+            Locomotive] = None  # Track user-manually selected locomotive
         self.default_icon_path = Path(
             __file__).parent.parent / "icons" / "neutrals_normal.png"
         self.icon_cache = {}  # Cache for loaded icons
@@ -991,10 +1023,23 @@ class Z21GUI:
                                                          '').replace('.', '')
         return normalized
 
-    def populate_list(self, filter_text: str = ""):
-        """Populate the locomotive list with fuzzy matching."""
+    def populate_list(self,
+                      filter_text: str = "",
+                      preserve_selection: bool = False):
+        """Populate the locomotive list with fuzzy matching.
+        
+        Args:
+            filter_text: Text to filter locomotives by
+            preserve_selection: If True, try to preserve the currently selected locomotive
+        """
         if not self.z21_data:
             return
+
+        # Store current selection before clearing
+        current_selection = None
+        current_loco = None
+        if preserve_selection and self.current_loco:
+            current_loco = self.current_loco
 
         self.loco_listbox.delete(0, tk.END)
         self.filtered_locos = []
@@ -1020,8 +1065,27 @@ class Z21GUI:
                 self.loco_listbox.insert(tk.END, display_text)
                 self.filtered_locos.append(loco)
 
-        # Select first matching locomotive if available
-        if self.filtered_locos:
+        # Try to preserve selection if requested and it was user-selected
+        if preserve_selection and current_loco and self.user_selected_loco:
+            # Only preserve if the current loco matches user-selected loco
+            if (current_loco.address == self.user_selected_loco.address
+                    and current_loco.name == self.user_selected_loco.name):
+                # Find the user-selected locomotive in filtered list
+                for i, loco in enumerate(self.filtered_locos):
+                    if (loco.address == self.user_selected_loco.address
+                            and loco.name == self.user_selected_loco.name):
+                        current_selection = i
+                        break
+
+        # Select locomotive
+        if current_selection is not None:
+            # Restore previous selection
+            self.loco_listbox.selection_set(current_selection)
+            self.loco_listbox.see(current_selection)
+            # Trigger selection event to update details
+            self.on_loco_select(None)
+        elif self.filtered_locos:
+            # No previous selection or not found, select first
             self.loco_listbox.selection_clear(0, tk.END)
             self.loco_listbox.selection_set(0)
             self.loco_listbox.see(0)
@@ -1056,6 +1120,14 @@ class Z21GUI:
                     if loco.address == self.current_loco.address and loco.name == self.current_loco.name:
                         self.current_loco_index = i
                         break
+
+            # Mark as user-selected if event is from user interaction (not None)
+            if event is not None:
+                self.user_selected_loco = self.current_loco
+            else:
+                # Programmatic selection, don't mark as user-selected
+                pass
+
             self.update_details()
 
     def create_new_locomotive(self):
@@ -1150,9 +1222,10 @@ class Z21GUI:
                 # Clear the details display
                 self.update_details()
 
-                # Update the list
-                self.populate_list(self.search_var.get(
-                ) if hasattr(self, 'search_var') else "")
+                # Update the list (preserve selection if possible)
+                self.populate_list(self.search_var.get() if hasattr(
+                    self, 'search_var') else "",
+                                   preserve_selection=True)
 
                 # Save changes to file
                 try:
@@ -1383,6 +1456,104 @@ class Z21GUI:
             button_frame = ttk.Frame(crop_window, padding=10)
             button_frame.pack(fill=tk.X)
 
+            def recognize_text_from_image():
+                """Recognize text from the cropped image using OCR."""
+                try:
+                    # Convert display coordinates back to original image coordinates
+                    orig_x1 = int(crop_rect['x1'] / scale)
+                    orig_y1 = int(crop_rect['y1'] / scale)
+                    orig_x2 = int(crop_rect['x2'] / scale)
+                    orig_y2 = int(crop_rect['y2'] / scale)
+
+                    # Ensure coordinates are within image bounds
+                    orig_x1 = max(0, min(orig_x1, img_width))
+                    orig_y1 = max(0, min(orig_y1, img_height))
+                    orig_x2 = max(orig_x1 + 1, min(orig_x2, img_width))
+                    orig_y2 = max(orig_y1 + 1, min(orig_y2, img_height))
+
+                    # Crop the image
+                    cropped_image = original_image.crop(
+                        (orig_x1, orig_y1, orig_x2, orig_y2))
+
+                    # Save to temporary file for OCR
+                    with tempfile.NamedTemporaryFile(
+                            delete=False, suffix='.png') as tmp_file:
+                        cropped_image.save(tmp_file.name, 'PNG')
+                        tmp_path = Path(tmp_file.name)
+
+                    try:
+                        # Extract text using OCR
+                        self.status_label.config(
+                            text="Recognizing text from image...")
+                        self.root.update()
+                        extracted_text = self.extract_text_from_file(
+                            str(tmp_path))
+
+                        if extracted_text:
+                            # Show recognized text in a dialog
+                            text_window = tk.Toplevel(crop_window)
+                            text_window.title("Recognized Text")
+                            text_window.geometry("600x400")
+                            text_window.transient(crop_window)
+
+                            # Create text widget with scrollbar
+                            text_frame = ttk.Frame(text_window, padding=10)
+                            text_frame.pack(fill=tk.BOTH, expand=True)
+
+                            text_widget = scrolledtext.ScrolledText(
+                                text_frame, wrap=tk.WORD, width=70, height=20)
+                            text_widget.pack(fill=tk.BOTH, expand=True)
+                            text_widget.insert(1.0, extracted_text)
+                            text_widget.config(state=tk.DISABLED)
+
+                            # Buttons
+                            button_frame_text = ttk.Frame(text_window,
+                                                          padding=10)
+                            button_frame_text.pack(fill=tk.X)
+
+                            def copy_text():
+                                text_window.clipboard_clear()
+                                text_window.clipboard_append(extracted_text)
+                                self.set_status_message(
+                                    "Text copied to clipboard!")
+
+                            def fill_fields():
+                                """Parse and fill locomotive fields from recognized text."""
+                                self.parse_and_fill_fields(extracted_text)
+                                text_window.destroy()
+                                self.set_status_message(
+                                    "Fields filled from recognized text!")
+
+                            ttk.Button(button_frame_text,
+                                       text="Close",
+                                       command=text_window.destroy).pack(
+                                           side=tk.RIGHT, padx=5)
+                            ttk.Button(button_frame_text,
+                                       text="Copy",
+                                       command=copy_text).pack(side=tk.RIGHT,
+                                                               padx=5)
+                            ttk.Button(button_frame_text,
+                                       text="Fill Fields",
+                                       command=fill_fields).pack(side=tk.RIGHT,
+                                                                 padx=5)
+
+                            self.status_label.config(
+                                text=self.default_status_text)
+                        else:
+                            messagebox.showwarning(
+                                "Warning",
+                                "No text could be recognized from the image.")
+                            self.status_label.config(
+                                text=self.default_status_text)
+                    finally:
+                        # Clean up temp file
+                        tmp_path.unlink()
+
+                except Exception as e:
+                    messagebox.showerror("Error",
+                                         f"Failed to recognize text: {e}")
+                    self.status_label.config(text=self.default_status_text)
+
             def save_cropped_image():
                 """Save the cropped image and update locomotive."""
                 try:
@@ -1467,6 +1638,10 @@ class Z21GUI:
                        command=crop_window.destroy).pack(side=tk.RIGHT, padx=5)
             ttk.Button(button_frame, text="Save",
                        command=save_cropped_image).pack(side=tk.RIGHT, padx=5)
+            ttk.Button(button_frame,
+                       text="Recognize Text",
+                       command=recognize_text_from_image).pack(side=tk.LEFT,
+                                                               padx=5)
 
             # Instructions label
             instructions = ttk.Label(
@@ -1639,21 +1814,51 @@ Function Details:  {len(loco.function_details)} available
                 text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
 
     def extract_text_from_file(self, file_path: str) -> str:
-        """Extract text from image or PDF using OCR."""
+        """Extract text from image or PDF using OCR (PaddleOCR preferred, fallback to pytesseract)."""
         file_path = Path(file_path)
 
-        # Try to import OCR libraries
+        # Try PaddleOCR first (better for text recognition)
+        # Note: PaddleOCR may cause segmentation fault on some systems
+        # If it fails, we'll fallback to pytesseract
+        if HAS_PADDLEOCR:
+            try:
+                print("Attempting to use PaddleOCR...")
+                return self._extract_text_with_paddleocr(file_path)
+            except (ImportError, ModuleNotFoundError) as e:
+                # PaddleOCR dependencies not installed
+                print(
+                    f"PaddleOCR dependencies not available: {e}, trying pytesseract..."
+                )
+                # Fallback to pytesseract
+                pass
+            except SystemExit:
+                # Segmentation fault or other fatal error - skip PaddleOCR
+                print(
+                    "PaddleOCR caused a fatal error (possibly segmentation fault), skipping..."
+                )
+                print("Falling back to pytesseract...")
+                pass
+            except Exception as e:
+                print(f"PaddleOCR failed: {e}, trying pytesseract...")
+                import traceback
+                traceback.print_exc()
+                # Fallback to pytesseract
+                pass
+
+        # Fallback to pytesseract
         try:
             import pytesseract
         except ImportError:
-            messagebox.showerror(
-                "Missing Dependency", "pytesseract is required for OCR.\n\n"
-                "Install it with: pip install pytesseract\n"
-                "Also install Tesseract OCR:\n"
-                "  macOS: brew install tesseract\n"
-                "  Linux: sudo apt-get install tesseract-ocr\n"
-                "  Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki"
-            )
+            if not HAS_PADDLEOCR:
+                messagebox.showerror(
+                    "Missing Dependency", "No OCR library available.\n\n"
+                    "Install PaddleOCR (recommended): pip install paddleocr\n"
+                    "Or install pytesseract: pip install pytesseract\n"
+                    "  Also install Tesseract OCR:\n"
+                    "    macOS: brew install tesseract\n"
+                    "    Linux: sudo apt-get install tesseract-ocr\n"
+                    "    Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki"
+                )
             return ""
 
         try:
@@ -1689,9 +1894,146 @@ Function Details:  {len(loco.function_details)} available
 
                 image = Image.open(file_path)
                 text = pytesseract.image_to_string(image)
+                if not text or not text.strip():
+                    # Return empty string if no text found, don't raise exception
+                    return ""
                 return text
         except Exception as e:
             raise Exception(f"OCR failed: {e}")
+
+    def _extract_text_with_paddleocr(self, file_path: Path) -> str:
+        """Extract text using PaddleOCR."""
+        if not HAS_PIL:
+            raise Exception("PIL/Pillow is required for image processing.")
+
+        # Initialize PaddleOCR with error handling
+        # Use English language model
+        # WARNING: PaddleOCR initialization may cause segmentation fault on some systems
+        # This is a known issue with PaddleOCR and its dependencies (paddle, opencv, etc.)
+        # If you see "segmentation fault" after this message, PaddleOCR is not compatible
+        # with your system and you should use pytesseract instead
+        print("=" * 60)
+        print("Initializing PaddleOCR...")
+        print("WARNING: This may cause segmentation fault on some systems.")
+        print(
+            "If the program crashes, PaddleOCR is not compatible with your setup."
+        )
+        print("=" * 60)
+        try:
+            # Try minimal initialization first to avoid segmentation fault
+            # Some PaddleOCR versions may have issues with certain parameters
+            print(
+                "Attempting PaddleOCR initialization with minimal parameters..."
+            )
+            print("(lang='en')")
+            ocr = PaddleOCR(lang='en')
+            print(
+                "✓ PaddleOCR initialized successfully with minimal parameters")
+        except Exception as init_error:
+            print(f"✗ PaddleOCR initialization failed: {init_error}")
+            print("Trying alternative initialization...")
+            try:
+                # Try with use_textline_orientation (new parameter)
+                print("Trying with use_textline_orientation=True...")
+                ocr = PaddleOCR(use_textline_orientation=True, lang='en')
+                print("✓ PaddleOCR initialized with use_textline_orientation")
+            except TypeError:
+                # Fallback to older parameter name if new one not supported
+                try:
+                    print("Trying with use_angle_cls=True...")
+                    ocr = PaddleOCR(use_angle_cls=True, lang='en')
+                    print("✓ PaddleOCR initialized with use_angle_cls")
+                except TypeError:
+                    # If neither parameter is supported, use minimal initialization
+                    print("Trying minimal initialization again...")
+                    ocr = PaddleOCR(lang='en')
+                    print("✓ PaddleOCR initialized with minimal parameters")
+            except Exception as e:
+                print(f"✗ PaddleOCR initialization error: {e}")
+                import traceback
+                traceback.print_exc()
+                raise Exception(f"Failed to initialize PaddleOCR: {e}")
+
+        if file_path.suffix.lower() == '.pdf':
+            # Handle PDF files
+            try:
+                from pdf2image import convert_from_path
+            except ImportError:
+                raise Exception("pdf2image is required for PDF processing.\n\n"
+                                "Install it with: pip install pdf2image\n"
+                                "Also install poppler:\n"
+                                "  macOS: brew install poppler\n"
+                                "  Linux: sudo apt-get install poppler-utils")
+
+            # Convert PDF to images
+            images = convert_from_path(str(file_path))
+            # Extract text from all pages
+            text_parts = []
+            for image in images:
+                # Convert PIL Image to numpy array
+                import numpy as np
+                img_array = np.array(image)
+                # Try new API first (predict method), fallback to old API
+                try:
+                    result = ocr.predict(img_array)
+                except (AttributeError, TypeError):
+                    # Fallback to old API if predict doesn't exist or fails
+                    try:
+                        result = ocr.ocr(img_array)
+                    except TypeError:
+                        # If cls parameter is not supported, try without it
+                        result = ocr.ocr(img_array, cls=False)
+                # Extract text from OCR results
+                page_text = []
+                if result and result[0]:
+                    for line in result[0]:
+                        if line and len(line) >= 2:
+                            text_info = line[1]
+                            if text_info and len(text_info) >= 2:
+                                page_text.append(text_info[0])
+                page_text_str = '\n'.join(page_text)
+                if page_text_str.strip():  # Only add non-empty pages
+                    text_parts.append(page_text_str)
+            return "\n".join(text_parts) if text_parts else ""
+        else:
+            # Handle image files
+            image = Image.open(file_path)
+            # Convert PIL Image to numpy array
+            import numpy as np
+            img_array = np.array(image)
+            print("Calling PaddleOCR OCR method...")
+            # Try new API first (predict method), fallback to old API
+            try:
+                result = ocr.predict(img_array)
+                print("PaddleOCR predict() succeeded")
+            except (AttributeError, TypeError) as e:
+                print(
+                    f"PaddleOCR predict() failed: {e}, trying ocr() method...")
+                # Fallback to old API if predict doesn't exist or fails
+                try:
+                    result = ocr.ocr(img_array)
+                    print("PaddleOCR ocr() succeeded")
+                except TypeError as e2:
+                    print(
+                        f"PaddleOCR ocr() with default params failed: {e2}, trying without cls..."
+                    )
+                    # If cls parameter is not supported, try without it
+                    result = ocr.ocr(img_array, cls=False)
+                    print("PaddleOCR ocr() without cls succeeded")
+                except Exception as e3:
+                    print(f"PaddleOCR ocr() failed with error: {e3}")
+                    raise
+            # Extract text from OCR results
+            text_lines = []
+            if result and result[0]:
+                for line in result[0]:
+                    if line and len(line) >= 2:
+                        text_info = line[1]
+                        if text_info and len(text_info) >= 2:
+                            text_lines.append(text_info[0])
+            text = '\n'.join(text_lines)
+            # Return empty string if no text found (don't raise exception)
+            return text if text.strip() else ""
 
     def parse_and_fill_fields(self, text: str):
         """Parse extracted text and fill locomotive fields."""
@@ -1886,28 +2228,21 @@ Function Details:  {len(loco.function_details)} available
             self.status_label.config(text="Scanning image for functions...")
             self.root.update()
 
-            # Try AI-based extraction first, fallback to OCR
-            functions = None
+            # Extract text using OCR (PaddleOCR preferred, fallback to pytesseract)
             try:
-                functions = self.extract_functions_with_ai(file_path)
-            except Exception as ai_error:
-                # Fallback to OCR if AI fails
-                self.status_label.config(
-                    text="AI extraction failed, trying OCR...")
-                self.root.update()
-                try:
-                    extracted_text = self.extract_text_from_file(file_path)
-                    if extracted_text:
-                        functions = self.parse_functions_from_text(
-                            extracted_text)
-                    else:
-                        raise Exception(
-                            f"AI extraction failed: {ai_error}. OCR also failed - no text extracted."
-                        )
-                except Exception as ocr_error:
-                    raise Exception(
-                        f"AI extraction failed: {ai_error}. OCR also failed: {ocr_error}"
-                    )
+                extracted_text = self.extract_text_from_file(file_path)
+            except Exception as ocr_error:
+                raise Exception(f"OCR extraction failed: {ocr_error}")
+
+            if not extracted_text or not extracted_text.strip():
+                raise Exception(
+                    "No text could be extracted from the image. Please ensure:\n"
+                    "1. The image contains clear, readable text\n"
+                    "2. PaddleOCR or pytesseract is properly installed\n"
+                    "3. The image format is supported (PNG, JPG, etc.)")
+
+            # Parse functions from OCR text
+            functions = self.parse_functions_from_text(extracted_text)
 
             if not functions:
                 messagebox.showwarning(
@@ -2395,9 +2730,10 @@ Be accurate and extract all visible functions."""
                     f"Failed to write changes to file: {write_error}. Changes saved in memory but not written to disk."
                 )
 
-            # Update the listbox to reflect name change
+            # Update the listbox to reflect name change (preserve selection)
             self.populate_list(
-                self.search_var.get() if hasattr(self, 'search_var') else "")
+                self.search_var.get() if hasattr(self, 'search_var') else "",
+                preserve_selection=True)
 
         except ValueError as e:
             # Show validation error in status bar
@@ -3580,9 +3916,10 @@ Be accurate and extract all visible functions."""
                     # Save changes to file
                     self.parser.write(self.z21_data, self.z21_file)
 
-                    # Update list and status
-                    self.populate_list(self.search_var.get(
-                    ) if hasattr(self, 'search_var') else "")
+                    # Update list and status (preserve selection)
+                    self.populate_list(self.search_var.get() if hasattr(
+                        self, 'search_var') else "",
+                                       preserve_selection=True)
                     self.update_status_count()
 
                     # Show success message

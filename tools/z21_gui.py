@@ -101,6 +101,7 @@ class Z21GUI:
         self.icon_mapping = self.load_icon_mapping()  # Load icon mapping
         self.status_timeout_id = None  # Store timeout ID for status message clearing
         self.default_status_text = "Loading..."  # Default status text
+        self._mouse_over_function_icon = False  # Flag to prevent layout updates during hover
 
         self.setup_ui()
         self.load_data()
@@ -200,21 +201,47 @@ class Z21GUI:
                                  width=20)
         search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-        # Button container for New and Delete buttons (vertical layout)
-        button_frame = ttk.Frame(search_frame)
-        button_frame.pack(side=tk.LEFT, padx=5)
+        # Button container for New, Delete, and Import buttons (horizontal layout)
+        # Align Import left edge with search entry left edge, New right edge with search entry right edge
+        # Use same structure as search_frame to ensure perfect alignment
+        button_frame = ttk.Frame(left_frame)
+        button_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
 
-        # New button to create a new locomotive
-        new_button = ttk.Button(button_frame,
-                                text="New",
-                                command=self.create_new_locomotive)
-        new_button.pack(side=tk.TOP, padx=0, pady=(0, 2))
+        # Create a label matching "Search:" to align buttons with entry field
+        # This ensures Import button aligns with search entry left edge
+        # Use same label text and padding as search_frame for perfect alignment
+        label_spacer = ttk.Label(button_frame, text="Search:")
+        label_spacer.pack(side=tk.LEFT, padx=5)
+        # Hide the label text but keep the space
+        label_spacer.config(text="",
+                            width=5)  # width=7 matches "Search:" width
 
-        # Delete button to delete selected locomotive
-        delete_button = ttk.Button(button_frame,
+        inner_button_frame = ttk.Frame(button_frame)
+        inner_button_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=0)
+
+        # 三个等宽列
+        for i in range(3):
+            inner_button_frame.grid_columnconfigure(i,
+                                                    weight=1,
+                                                    uniform="buttons")
+
+        # Import button on the left
+        import_button = ttk.Button(inner_button_frame,
+                                   text="Import",
+                                   command=self.import_z21_loco)
+        import_button.grid(row=0, column=0, padx=5, pady=0, sticky="we")
+
+        # Delete button in the middle
+        delete_button = ttk.Button(inner_button_frame,
                                    text="Delete",
                                    command=self.delete_selected_locomotive)
-        delete_button.pack(side=tk.TOP, padx=0, pady=0)
+        delete_button.grid(row=0, column=1, padx=5, pady=0, sticky="we")
+
+        # New button on the right
+        new_button = ttk.Button(inner_button_frame,
+                                text="New",
+                                command=self.create_new_locomotive)
+        new_button.grid(row=0, column=2, padx=5, pady=0, sticky="we")
 
         # Locomotive list
         list_frame = ttk.Frame(left_frame)
@@ -745,11 +772,6 @@ class Z21GUI:
                                        command=self.share_with_airdrop)
         self.share_button.pack(side=tk.LEFT, padx=5)
 
-        self.import_button = ttk.Button(button_frame,
-                                        text="Import Loco",
-                                        command=self.import_z21_loco)
-        self.import_button.pack(side=tk.LEFT, padx=5)
-
         self.scan_button = ttk.Button(button_frame,
                                       text="Scan for Details",
                                       command=self.scan_for_details)
@@ -886,6 +908,35 @@ class Z21GUI:
             canvas_width = event.width
             canvas.itemconfig(canvas_window, width=canvas_width)
 
+            # Don't trigger layout recalculation if mouse is over function icons
+            # This prevents layout flicker during hover
+            if hasattr(self, '_mouse_over_function_icon'
+                       ) and self._mouse_over_function_icon:
+                return
+
+            # Clear cached canvas width to trigger layout recalculation on next update
+            # This allows function icons to adjust when window size changes
+            if hasattr(self, '_cached_canvas_width'):
+                old_width = self._cached_canvas_width
+                # Only clear cache if width changed significantly (20px) to prevent flicker
+                if old_width is None or abs(canvas_width - old_width) >= 20:
+                    self._cached_canvas_width = None
+                    self._cached_cols = None
+                    # If we're currently viewing the Functions tab, update the layout
+                    try:
+                        if (hasattr(self, 'notebook') and self.notebook.index(
+                                self.notebook.select()) == 1
+                                and hasattr(self, 'current_loco')
+                                and self.current_loco):
+                            # Schedule layout update with minimal delay to ensure canvas width is updated
+                            if not hasattr(self, '_layout_update_scheduled'):
+                                self._layout_update_scheduled = True
+                                # Use after_idle to ensure canvas is fully configured, then short delay
+                                self.root.after_idle(lambda: self.root.after(
+                                    50, self._update_functions_layout))
+                    except:
+                        pass
+
         def on_mousewheel(event):
             """Handle mouse wheel scrolling (two-finger scroll on trackpad)."""
             # Check if we're in the functions tab
@@ -1003,6 +1054,37 @@ class Z21GUI:
         # Store update function for later use
         self.update_scroll_bindings = update_bindings
 
+        # Also bind to main window size changes to ensure Functions tab responds
+        def on_window_configure(event):
+            """Handle main window size changes."""
+            # Don't trigger layout update if mouse is over function icons
+            if hasattr(self, '_mouse_over_function_icon'
+                       ) and self._mouse_over_function_icon:
+                return
+            # Only respond if Functions tab is selected
+            try:
+                if (hasattr(self, 'notebook')
+                        and self.notebook.index(self.notebook.select()) == 1
+                        and hasattr(self, 'current_loco')
+                        and self.current_loco):
+                    # Clear cache to force recalculation
+                    if hasattr(self, '_cached_canvas_width'):
+                        self._cached_canvas_width = None
+                        self._cached_cols = None
+                    # Schedule layout update immediately
+                    if not hasattr(self, '_layout_update_scheduled'):
+                        self._layout_update_scheduled = True
+                        # Use shorter delay for more responsive updates
+                        self.root.after_idle(lambda: self.root.after(
+                            50, self._update_functions_layout))
+            except:
+                pass
+
+        # Bind to root window and functions_frame for size changes
+        # Note: canvas.configure is already bound above, no need to bind again
+        self.root.bind("<Configure>", on_window_configure, add='+')
+        self.functions_frame.bind("<Configure>", on_window_configure, add='+')
+
     def load_data(self):
         """Load Z21 file data."""
         self.status_label.config(text="Loading data...")
@@ -1013,7 +1095,7 @@ class Z21GUI:
             self.z21_data = self.parser.parse()
 
             # populate_list will automatically select the first locomotive
-            self.populate_list()
+            self.populate_list(auto_select_first=True)
             self.update_status_count()
             self.status_label.config(text=self.default_status_text)
         except Exception as e:
@@ -1035,12 +1117,14 @@ class Z21GUI:
 
     def populate_list(self,
                       filter_text: str = "",
-                      preserve_selection: bool = False):
+                      preserve_selection: bool = False,
+                      auto_select_first: bool = False):
         """Populate the locomotive list with fuzzy matching.
         
         Args:
             filter_text: Text to filter locomotives by
             preserve_selection: If True, try to preserve the currently selected locomotive
+            auto_select_first: If True and no selection is preserved, select the first item
         """
         if not self.z21_data:
             return
@@ -1094,7 +1178,7 @@ class Z21GUI:
             self.loco_listbox.see(current_selection)
             # Trigger selection event to update details
             self.on_loco_select(None)
-        elif self.filtered_locos:
+        elif self.filtered_locos and auto_select_first:
             # No previous selection or not found, select first
             self.loco_listbox.selection_clear(0, tk.END)
             self.loco_listbox.selection_set(0)
@@ -1105,40 +1189,72 @@ class Z21GUI:
     def on_search(self, *args):
         """Handle search text change."""
         filter_text = self.search_var.get()
-        self.populate_list(filter_text)
+        self.populate_list(filter_text, auto_select_first=True)
 
     def on_loco_select(self, event):
         """Handle locomotive selection."""
+        # Check if focus is on listbox before updating (for keyboard navigation)
+        focus_was_on_listbox = (self.root.focus_get() == self.loco_listbox)
+
         selection = self.loco_listbox.curselection()
         if not selection:
-            # If no selection but we have filtered locos, try to select first
-            if self.filtered_locos:
-                self.loco_listbox.selection_set(0)
-                selection = (0, )
+            # Only auto-select if this is a programmatic call (event is None) and we have filtered locos
+            # Don't auto-select if user is just switching focus
+            if event is None and self.filtered_locos:
+                # Check if we have a current_loco that should be preserved
+                if self.current_loco and self.current_loco in self.filtered_locos:
+                    # Find and restore the current locomotive selection
+                    for i, loco in enumerate(self.filtered_locos):
+                        if (loco.address == self.current_loco.address
+                                and loco.name == self.current_loco.name):
+                            self.loco_listbox.selection_set(i)
+                            selection = (i, )
+                            break
+                # If not found, select first only if no current_loco exists
+                if not selection and self.filtered_locos:
+                    self.loco_listbox.selection_set(0)
+                    selection = (0, )
             else:
+                # User interaction but no selection - don't change anything
                 return
 
         index = selection[0]
         if index < len(self.filtered_locos):
-            self.current_loco = self.filtered_locos[index]
-            # Store original address for database lookup (in case user changes it)
-            self.original_loco_address = self.current_loco.address
-            # Find the locomotive index in z21_data.locomotives
-            self.current_loco_index = None
-            if self.z21_data:
-                for i, loco in enumerate(self.z21_data.locomotives):
-                    if loco.address == self.current_loco.address and loco.name == self.current_loco.name:
-                        self.current_loco_index = i
-                        break
+            new_loco = self.filtered_locos[index]
 
-            # Mark as user-selected if event is from user interaction (not None)
-            if event is not None:
-                self.user_selected_loco = self.current_loco
+            # Only update if the locomotive actually changed
+            # This prevents unnecessary updates when just switching focus
+            if (self.current_loco is None
+                    or new_loco.address != self.current_loco.address
+                    or new_loco.name != self.current_loco.name):
+
+                self.current_loco = new_loco
+                # Store original address for database lookup (in case user changes it)
+                self.original_loco_address = self.current_loco.address
+                # Find the locomotive index in z21_data.locomotives
+                self.current_loco_index = None
+                if self.z21_data:
+                    for i, loco in enumerate(self.z21_data.locomotives):
+                        if loco.address == self.current_loco.address and loco.name == self.current_loco.name:
+                            self.current_loco_index = i
+                            break
+
+                # Mark as user-selected if event is from user interaction (not None)
+                if event is not None:
+                    self.user_selected_loco = self.current_loco
+
+                # Store focus state before updating details
+                self._preserve_listbox_focus = focus_was_on_listbox
+
+                self.update_details()
+
+                # If focus was on listbox (keyboard navigation), restore it after update
+                if focus_was_on_listbox:
+                    self.root.after_idle(lambda: self.loco_listbox.focus_set())
             else:
-                # Programmatic selection, don't mark as user-selected
-                pass
-
-            self.update_details()
+                # Same locomotive, just restore focus if needed
+                if focus_was_on_listbox:
+                    self.root.after_idle(lambda: self.loco_listbox.focus_set())
 
     def create_new_locomotive(self):
         """Create a new locomotive with empty information."""
@@ -1760,7 +1876,10 @@ Function Details:  {len(loco.function_details)} available
             text += "\n"
             for func_num, func_info in sorted_funcs:
                 shortcut = f" [{func_info.shortcut}]" if func_info.shortcut else ""
-                time_str = f" (time: {func_info.time}s)" if func_info.time != "0" else ""
+                # Only show time for time button (button_type == 2), not for switch (0) or push-button (1)
+                time_str = ""
+                if func_info.button_type == 2 and func_info.time != "0":
+                    time_str = f" (time: {func_info.time}s)"
                 btn_type = func_info.button_type_name()
                 text += f"  F{func_num:<3} - {func_info.image_name:<25} [{btn_type}] {shortcut}{time_str}\n"
             text += "\n"
@@ -2051,8 +2170,7 @@ Function Details:  {len(loco.function_details)} available
             raise ImportError(
                 "EasyOCR is required for 'Scan to Functions' feature.\n\n"
                 "Install it with: pip install easyocr\n\n"
-                "Note: First-time use will download language models (~500MB)."
-            )
+                "Note: First-time use will download language models (~500MB).")
 
         if not HAS_PIL:
             raise Exception("PIL/Pillow is required for image processing.")
@@ -2065,8 +2183,10 @@ Function Details:  {len(loco.function_details)} available
             # Initialize EasyOCR reader (English language)
             # This will download models on first use
             print("Initializing EasyOCR...")
-            print("Note: First-time use will download language models (~500MB)")
-            reader = easyocr.Reader(['en'], gpu=False)  # Use CPU mode for compatibility
+            print(
+                "Note: First-time use will download language models (~500MB)")
+            reader = easyocr.Reader(
+                ['en'], gpu=False)  # Use CPU mode for compatibility
             print("✓ EasyOCR initialized successfully")
 
             if file_path.suffix.lower() == '.pdf':
@@ -2118,10 +2238,8 @@ Function Details:  {len(loco.function_details)} available
                 return text if text.strip() else ""
 
         except ImportError as e:
-            raise ImportError(
-                f"EasyOCR import failed: {e}\n\n"
-                "Install EasyOCR with: pip install easyocr"
-            )
+            raise ImportError(f"EasyOCR import failed: {e}\n\n"
+                              "Install EasyOCR with: pip install easyocr")
         except Exception as e:
             raise Exception(f"EasyOCR failed: {e}")
 
@@ -2346,14 +2464,19 @@ Function Details:  {len(loco.function_details)} available
                     try:
                         func_num = int(func_number_str)
                     except ValueError:
-                        print(f"Warning: Invalid function number format: {func_number_str}, skipping")
+                        print(
+                            f"Warning: Invalid function number format: {func_number_str}, skipping"
+                        )
                         skipped_count += 1
                         continue
                 else:
                     try:
-                        func_num = int(func_number_str[1:])  # Remove 'F' prefix
+                        func_num = int(
+                            func_number_str[1:])  # Remove 'F' prefix
                     except ValueError:
-                        print(f"Warning: Invalid function number format: {func_number_str}, skipping")
+                        print(
+                            f"Warning: Invalid function number format: {func_number_str}, skipping"
+                        )
                         skipped_count += 1
                         continue
 
@@ -2367,29 +2490,59 @@ Function Details:  {len(loco.function_details)} available
                 if not shortcut:
                     shortcut = self.generate_shortcut(func_name)
 
-                # Get icon from JSON, or match if not provided
-                icon_name = func_data.get('icon', '').strip()
+                # Get icon from JSON
+                # We assume 'icon' field in JSON matches a filename in the icons directory
+                icon_val = func_data.get('icon', '').strip()
+                icon_name = ""
+                resolved_filename = ""
+
+                icons_dir = Path(__file__).parent.parent / "icons"
+
+                if icon_val:
+                    # Try to resolve to a physical filename first
+                    if (icons_dir / icon_val).exists():
+                        resolved_filename = icon_val
+                    elif (icons_dir / f"{icon_val}.png").exists():
+                        resolved_filename = f"{icon_val}.png"
+                    elif (icons_dir / f"{icon_val}_Normal.png").exists():
+                        resolved_filename = f"{icon_val}_Normal.png"
+
+                    if resolved_filename:
+                        # Try to map filename back to a Z21 icon key (which is what we want to save)
+                        # Search in icon_mapping for a value that matches the resolved filename
+                        for key, val in self.icon_mapping.items():
+                            if val.get('filename') == resolved_filename:
+                                icon_name = key
+                                break
+
+                        # If not in mapping, use the filename as is
+                        if not icon_name:
+                            icon_name = resolved_filename
+                    else:
+                        # Not found on disk, check if it's a key in mapping
+                        if icon_val in self.icon_mapping:
+                            icon_name = icon_val
+                        else:
+                            # Fuzzy match key
+                            matched_key = self.match_icon_name_to_mapping(
+                                icon_val)
+                            if matched_key:
+                                icon_name = matched_key
+
+                # Fallback to function name matching
                 if not icon_name:
                     # Use match_function_to_icon for best guess based on function name
-                    icon_name = self.match_function_to_icon(func_name)
-                else:
-                    # Try to match icon from JSON to icon_mapping
-                    # First, check if icon_name exists directly in icon_mapping
-                    if icon_name in self.icon_mapping:
-                        # Direct match found, use it
-                        pass
+                    matched_key = self.match_function_to_icon(func_name)
+                    # match_function_to_icon returns the key (Z21 icon name)
+                    if matched_key:
+                        icon_name = matched_key
+
+                # Final fallback: if nothing matched, use "neutral" (Z21 icon name)
+                if not icon_name:
+                    if "neutral" in self.icon_mapping:
+                        icon_name = "neutral"
                     else:
-                        # Try to find best matching icon using the icon name from JSON
-                        matched_icon = self.match_icon_name_to_mapping(icon_name)
-                        if matched_icon:
-                            icon_name = matched_icon
-                        else:
-                            # If icon from JSON doesn't match, try matching by function name
-                            matched_icon = self.match_function_to_icon(func_name)
-                            if matched_icon:
-                                icon_name = matched_icon
-                            # If still not found, keep the original icon_name
-                            # (it might be added later or be valid)
+                        icon_name = "neutral_Normal.png"
 
                 # Map type to button_type
                 # "switch" -> 0, "push" -> 1, default -> 0
@@ -2403,7 +2556,8 @@ Function Details:  {len(loco.function_details)} available
                 # Check if function already exists
                 if func_num in self.current_loco.function_details:
                     # Update existing function
-                    existing_func = self.current_loco.function_details[func_num]
+                    existing_func = self.current_loco.function_details[
+                        func_num]
                     existing_func.shortcut = shortcut
                     existing_func.image_name = icon_name
                     existing_func.button_type = button_type
@@ -2411,21 +2565,19 @@ Function Details:  {len(loco.function_details)} available
                 else:
                     # Create new FunctionInfo
                     # Get next available position
-                    max_position = 0
+                    max_position = -1  # Start from -1 so first one becomes 0
                     if self.current_loco.function_details:
                         max_position = max(
-                            func_info.position
-                            for func_info in self.current_loco.function_details.values()
-                        )
+                            func_info.position for func_info in
+                            self.current_loco.function_details.values())
 
-                    func_info = FunctionInfo(
-                        function_number=func_num,
-                        image_name=icon_name,
-                        shortcut=shortcut,
-                        position=max_position + 1,
-                        time="0",
-                        button_type=button_type,
-                        is_active=True)
+                    func_info = FunctionInfo(function_number=func_num,
+                                             image_name=icon_name,
+                                             shortcut=shortcut,
+                                             position=max_position + 1,
+                                             time="0",
+                                             button_type=button_type,
+                                             is_active=True)
 
                     # Add to locomotive
                     self.current_loco.function_details[func_num] = func_info
@@ -2436,44 +2588,47 @@ Function Details:  {len(loco.function_details)} available
             # Show results
             result_messages = []
             if added_count > 0:
-                result_messages.append(f"Added {added_count} new function(s): {', '.join(added_functions)}")
+                result_messages.append(
+                    f"Added {added_count} new function(s): {', '.join(added_functions)}"
+                )
             if updated_count > 0:
-                result_messages.append(f"Updated {updated_count} existing function(s)")
+                result_messages.append(
+                    f"Updated {updated_count} existing function(s)")
             if skipped_count > 0:
-                result_messages.append(f"Skipped {skipped_count} invalid function(s)")
+                result_messages.append(
+                    f"Skipped {skipped_count} invalid function(s)")
 
             if added_count > 0 or updated_count > 0:
                 messagebox.showinfo(
-                    "Success",
-                    "\n".join(result_messages) if result_messages else "Functions processed successfully!"
-                )
+                    "Success", "\n".join(result_messages) if result_messages
+                    else "Functions processed successfully!")
 
                 # Update functions display
                 self.update_functions()
-                self.update_overview()  # Update Function Summary in Overview tab
+                self.update_overview(
+                )  # Update Function Summary in Overview tab
             else:
                 if skipped_count > 0:
                     messagebox.showwarning(
-                        "Warning",
-                        f"No functions were added or updated.\n\n"
-                        f"Skipped {skipped_count} invalid function(s)."
-                    )
+                        "Warning", f"No functions were added or updated.\n\n"
+                        f"Skipped {skipped_count} invalid function(s).")
                 else:
                     messagebox.showinfo(
-                        "Info", "No new functions to add. All functions already exist.")
+                        "Info",
+                        "No new functions to add. All functions already exist."
+                    )
 
             self.set_status_message(
                 f"Loaded {len(self.z21_data.locomotives)} locomotives")
 
         except json.JSONDecodeError as e:
             messagebox.showerror(
-                "JSON Error",
-                f"Failed to parse JSON file:\n{e}\n\n"
-                "Please ensure the file is valid JSON format."
-            )
+                "JSON Error", f"Failed to parse JSON file:\n{e}\n\n"
+                "Please ensure the file is valid JSON format.")
             self.set_status_message("Failed to read JSON file")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to scan functions from JSON: {e}")
+            messagebox.showerror("Error",
+                                 f"Failed to scan functions from JSON: {e}")
             import traceback
             traceback.print_exc()
             self.set_status_message("Failed to scan functions from JSON")
@@ -2802,25 +2957,31 @@ Be accurate and extract all visible functions."""
         """
         if not icon_name:
             return ''
-        
+
         icon_name_lower = icon_name.lower().strip()
         icon_names = list(self.icon_mapping.keys())
-        
+
         # Direct match (case-insensitive)
         for icon_key in icon_names:
             if icon_key.lower() == icon_name_lower:
                 return icon_key
-        
+
         # Partial match: check if icon_name is contained in any icon_mapping key
         for icon_key in icon_names:
             icon_key_lower = icon_key.lower()
             if icon_name_lower in icon_key_lower or icon_key_lower in icon_name_lower:
                 return icon_key
-        
+
         # Keyword-based matching
         icon_keyword_map = {
-            'light': ['light', 'lamp', 'beam', 'sidelight', 'interior_light', 'cabin_light', 'cycle_light'],
-            'sound': ['sound', 'sound1', 'sound2', 'sound3', 'sound4', 'curve_sound', 'sound_brake'],
+            'light': [
+                'light', 'lamp', 'beam', 'sidelight', 'interior_light',
+                'cabin_light', 'cycle_light'
+            ],
+            'sound': [
+                'sound', 'sound1', 'sound2', 'sound3', 'sound4', 'curve_sound',
+                'sound_brake'
+            ],
             'horn': ['horn', 'horn_high', 'horn_low', 'horn_two_sound'],
             'bell': ['bell'],
             'whistle': ['whistle', 'whistle_long', 'whistle_short'],
@@ -2839,7 +3000,7 @@ Be accurate and extract all visible functions."""
             'shunting': ['shunting', 'hump_gear'],
             'generic': ['neutral', 'generic'],
         }
-        
+
         # Try keyword matching
         for keyword, icon_candidates in icon_keyword_map.items():
             if keyword in icon_name_lower:
@@ -2852,12 +3013,12 @@ Be accurate and extract all visible functions."""
                     for candidate in icon_candidates:
                         if candidate in icon_key.lower():
                             return icon_key
-        
+
         # Fuzzy matching: find icon names that contain words from icon_name
         icon_words = set(re.findall(r'\b\w+\b', icon_name_lower))
         best_match = None
         best_score = 0
-        
+
         for icon_key in icon_names:
             icon_key_words = set(re.findall(r'\b\w+\b', icon_key.lower()))
             # Calculate overlap score
@@ -2865,10 +3026,10 @@ Be accurate and extract all visible functions."""
             if overlap > best_score:
                 best_score = overlap
                 best_match = icon_key
-        
+
         if best_match and best_score > 0:
             return best_match
-        
+
         # No match found
         return ''
 
@@ -4212,20 +4373,57 @@ Be accurate and extract all visible functions."""
         if hasattr(self, 'update_scroll_bindings'):
             self.update_scroll_bindings()
 
-        # Ensure canvas has focus for scrolling
-        self.functions_canvas.focus_set()
+        # Only set canvas focus if listbox doesn't have focus (for keyboard navigation)
+        # This prevents focus from moving to right panel when using arrow keys in listbox
+        if not (hasattr(self, '_preserve_listbox_focus')
+                and self._preserve_listbox_focus):
+            # Ensure canvas has focus for scrolling
+            self.functions_canvas.focus_set()
 
         # Calculate grid layout based on available width
         # Each card is approximately 100 pixels wide (80 icon + padding)
         # Calculate columns based on canvas width
-        self.functions_canvas.update_idletasks()  # Update to get actual width
-        canvas_width = self.functions_canvas.winfo_width()
-        if canvas_width < 100:
-            canvas_width = 800  # Default width if not yet rendered
+        # Get canvas width without triggering update_idletasks during hover events
+        # Only use update_idletasks if cache is not available to avoid layout flicker
+        if (hasattr(self, '_cached_canvas_width')
+                and self._cached_canvas_width is not None):
+            # Use cached width to avoid triggering layout recalculation
+            current_canvas_width = self._cached_canvas_width
+        else:
+            # Only call update_idletasks when cache is not available (initial render)
+            self.functions_canvas.update_idletasks(
+            )  # Update to get actual width
+            current_canvas_width = self.functions_canvas.winfo_width()
+            if current_canvas_width < 100:
+                # If canvas not yet rendered, try to get width from parent frame
+                try:
+                    parent_width = self.functions_frame.winfo_width()
+                    if parent_width > 100:
+                        current_canvas_width = parent_width - 20  # Account for padding
+                    else:
+                        current_canvas_width = 800  # Default width if not yet rendered
+                except:
+                    current_canvas_width = 800  # Default width if not yet rendered
 
         card_width = 100  # Fixed card width (matches CARD_WIDTH in create_function_card)
-        cols = max(1, (canvas_width - 40) //
-                   card_width)  # Account for scrollbar and padding
+        current_cols = max(1, (current_canvas_width - 40) //
+                           card_width)  # Account for scrollbar and padding
+
+        # Always recalculate if cache is cleared or width changed significantly
+        # Use larger tolerance (20px) to prevent flicker during hover
+        if (hasattr(self, '_cached_canvas_width')
+                and hasattr(self, '_cached_cols')
+                and self._cached_canvas_width is not None
+                and abs(current_canvas_width - self._cached_canvas_width)
+                < 20):  # Allow 20px tolerance to prevent flicker during hover
+            canvas_width = self._cached_canvas_width
+            cols = self._cached_cols
+        else:
+            # Update cache with new values
+            canvas_width = current_canvas_width
+            cols = current_cols
+            self._cached_canvas_width = canvas_width
+            self._cached_cols = cols
 
         # Row 0: Title
         header_label = ttk.Label(self.functions_frame_inner,
@@ -4296,9 +4494,33 @@ Be accurate and extract all visible functions."""
                 widget.bind("<Button-1>",
                             lambda e, fnum=fn, finfo=fi: self.edit_function(
                                 fnum, finfo))
-                widget.bind("<Enter>",
-                            lambda e: e.widget.config(cursor="hand2"))
-                widget.bind("<Leave>", lambda e: e.widget.config(cursor=""))
+
+                # Disable cursor change to prevent layout flicker
+                # Set flag to prevent layout updates during hover
+                def on_enter(e):
+                    try:
+                        # Set flag to prevent layout updates
+                        self._mouse_over_function_icon = True
+                        # Disabled cursor change to prevent layout flicker
+                        # e.widget.config(cursor="hand2")
+                    except:
+                        pass
+
+                def on_leave(e):
+                    try:
+                        # Clear flag after a short delay to allow layout updates again
+                        def clear_flag():
+                            self._mouse_over_function_icon = False
+
+                        self.root.after(100,
+                                        clear_flag)  # Clear flag after 100ms
+                        # Disabled cursor change to prevent layout flicker
+                        # e.widget.config(cursor="")
+                    except:
+                        pass
+
+                widget.bind("<Enter>", on_enter)
+                widget.bind("<Leave>", on_leave)
                 for child in widget.winfo_children():
                     make_clickable(child, fn, fi)
 
@@ -4317,6 +4539,25 @@ Be accurate and extract all visible functions."""
             self.functions_frame_inner.grid_columnconfigure(i,
                                                             weight=0,
                                                             uniform='card')
+
+        # Clear the preserve focus flag after update
+        if hasattr(self, '_preserve_listbox_focus'):
+            self._preserve_listbox_focus = False
+
+    def _update_functions_layout(self):
+        """Update functions layout when window size changes (called from canvas configure event)."""
+        # Clear the scheduled flag
+        self._layout_update_scheduled = False
+
+        # Only update if we're in Functions tab and have a current locomotive
+        try:
+            if (hasattr(self, 'notebook')
+                    and self.notebook.index(self.notebook.select()) == 1
+                    and hasattr(self, 'current_loco') and self.current_loco):
+                # Recalculate and update the layout
+                self.update_functions()
+        except:
+            pass
 
     def save_function_changes(self):
         """Save all function changes to the Z21 file."""
@@ -4356,17 +4597,56 @@ Be accurate and extract all visible functions."""
         return 128  # Fallback if all are used
 
     def get_available_icons(self):
-        """Get list of available icon names from icon mapping."""
-        icon_names = sorted(self.icon_mapping.keys())
-        # Also add common icon names that might not be in mapping
+        """Get list of available icon names from icon mapping and icons directory."""
+        icon_names = set()
+
+        # Add all icons from icon_mapping.json
+        icon_names.update(self.icon_mapping.keys())
+
+        # Also scan icons directory for additional icon files
+        project_root = Path(__file__).parent.parent
+        icons_dir = project_root / "icons"
+        if icons_dir.exists():
+            for icon_file in icons_dir.glob("*.png"):
+                # Extract icon name from filename
+                # Remove _Normal.png, _normal.png, or .png suffix
+                icon_name = icon_file.stem  # Gets filename without extension
+                # Remove common suffixes
+                for suffix in [
+                        '_Normal', '_normal', '_On', '_on', '_Off', '_off'
+                ]:
+                    if icon_name.endswith(suffix):
+                        icon_name = icon_name[:-len(suffix)]
+                        break
+                # Also try to match by removing known patterns
+                if icon_name.endswith('_on'):
+                    icon_name = icon_name[:-3]
+                elif icon_name.endswith('_off'):
+                    icon_name = icon_name[:-4]
+
+                # Add the icon name (use the key if it exists in mapping, otherwise use the cleaned name)
+                if icon_name not in icon_names:
+                    # Check if any mapping key matches this filename
+                    matched = False
+                    for key, val in self.icon_mapping.items():
+                        if val.get('filename', '') == icon_file.name:
+                            icon_names.add(key)
+                            matched = True
+                            break
+                    if not matched:
+                        # Use the cleaned filename as icon name
+                        icon_names.add(icon_name)
+
+        # Add common icon names that might not be in mapping or directory
         common_icons = [
             'light', 'bell', 'horn_two_sound', 'steam', 'whistle_long',
-            'whistle_short', 'neutral', 'sound1', 'sound2', 'sound3', 'sound4'
+            'whistle_short', 'neutral', 'sound1', 'sound2', 'sound3', 'sound4',
+            'sound5', 'horn_high', 'horn_low', 'couple', 'decouple', 'fan',
+            'compressor', 'air_pump', 'blower', 'generator', 'diesel_generator'
         ]
-        for icon in common_icons:
-            if icon not in icon_names:
-                icon_names.append(icon)
-        return sorted(set(icon_names))
+        icon_names.update(common_icons)
+
+        return sorted(icon_names)
 
     def add_new_function(self):
         """Open dialog to add a new function."""
@@ -5051,40 +5331,88 @@ Be accurate and extract all visible functions."""
             # First, try to use mapping file
             if icon_name in self.icon_mapping:
                 mapped_file = self.icon_mapping[icon_name]
-                icon_path = Path(mapped_file.get('path', ''))
-                if icon_path.exists():
-                    try:
-                        if HAS_PIL:
-                            img = Image.open(icon_path)
-                            if img.mode != 'RGBA':
-                                img = img.convert('RGBA')
+                # Try path (can be absolute or relative to project root)
+                mapped_path = mapped_file.get('path', '')
+                if mapped_path:
+                    # If path is relative (doesn't start with /), resolve relative to project root
+                    if not Path(mapped_path).is_absolute():
+                        icon_path = project_root / mapped_path
+                    else:
+                        icon_path = Path(mapped_path)
 
-                            # Convert to black color
-                            img = convert_to_black(img)
+                    if icon_path.exists():
+                        try:
+                            if HAS_PIL:
+                                img = Image.open(icon_path)
+                                if img.mode != 'RGBA':
+                                    img = img.convert('RGBA')
 
-                            # Create white background
-                            white_bg = Image.new('RGB', size, color='white')
+                                # Convert to black color
+                                img = convert_to_black(img)
 
-                            # Resize icon
-                            icon_resized = img.resize(size, Image.LANCZOS)
+                                # Create white background
+                                white_bg = Image.new('RGB',
+                                                     size,
+                                                     color='white')
 
-                            # Paste icon on white background
-                            if icon_resized.mode == 'RGBA':
-                                white_bg.paste(icon_resized, (0, 0),
-                                               icon_resized)
-                            else:
-                                white_bg.paste(icon_resized, (0, 0))
+                                # Resize icon
+                                icon_resized = img.resize(size, Image.LANCZOS)
 
-                            return ImageTk.PhotoImage(white_bg)
-                    except Exception as e:
-                        # Debug: print error (can be removed later)
-                        print(
-                            f"Error loading icon from mapping ({icon_name}): {e}"
-                        )
-                        pass
+                                # Paste icon on white background
+                                if icon_resized.mode == 'RGBA':
+                                    white_bg.paste(icon_resized, (0, 0),
+                                                   icon_resized)
+                                else:
+                                    white_bg.paste(icon_resized, (0, 0))
+
+                                return ImageTk.PhotoImage(white_bg)
+                        except Exception as e:
+                            # Debug: print error (can be removed later)
+                            print(
+                                f"Error loading icon from mapping path ({icon_name}): {e}"
+                            )
+                            pass
+
+                # If absolute path doesn't exist, try using filename in project icons directory
+                mapped_filename = mapped_file.get('filename', '')
+                if mapped_filename:
+                    icon_path = icons_dir / mapped_filename
+                    if icon_path.exists():
+                        try:
+                            if HAS_PIL:
+                                img = Image.open(icon_path)
+                                if img.mode != 'RGBA':
+                                    img = img.convert('RGBA')
+
+                                # Convert to black color
+                                img = convert_to_black(img)
+
+                                # Create white background
+                                white_bg = Image.new('RGB',
+                                                     size,
+                                                     color='white')
+
+                                # Resize icon
+                                icon_resized = img.resize(size, Image.LANCZOS)
+
+                                # Paste icon on white background
+                                if icon_resized.mode == 'RGBA':
+                                    white_bg.paste(icon_resized, (0, 0),
+                                                   icon_resized)
+                                else:
+                                    white_bg.paste(icon_resized, (0, 0))
+
+                                return ImageTk.PhotoImage(white_bg)
+                        except Exception as e:
+                            # Debug: print error (can be removed later)
+                            print(
+                                f"Error loading icon from mapping filename ({icon_name}): {e}"
+                            )
+                            pass
 
             # Fallback: Try multiple naming patterns for icons directory
             icon_patterns = [
+                icon_name,  # Try exact name first (e.g. light_Normal.png)
                 f"{icon_name}_normal.png",  # light_normal.png
                 f"{icon_name}_Normal.png",  # light_Normal.png (actual pattern)
                 f"{icon_name}.png",  # light.png

@@ -2,280 +2,288 @@
   "version": "1.0",
   "matches": {
     "neutral": {
-      "path": "/Users/gq/projs/Z21/icons/neutral_Normal.png",
+      "path": "icons/neutral_Normal.png",
       "filename": "neutral_Normal.png"
     },
     "decouple": {
-      "path": "/Users/gq/projs/Z21/icons/decouple_Normal.png",
+      "path": "icons/decouple_Normal.png",
       "filename": "decouple_Normal.png"
     },
     "sound2": {
-      "path": "/Users/gq/projs/Z21/icons/sound2_Normal.png",
+      "path": "icons/sound2_Normal.png",
       "filename": "sound2_Normal.png"
     },
     "sidelights": {
-      "path": "/Users/gq/projs/Z21/icons/sidelights_Normal.png",
+      "path": "icons/sidelights_Normal.png",
       "filename": "sidelights_Normal.png"
     },
     "whistle_long": {
-      "path": "/Users/gq/projs/Z21/icons/whistle_long_Normal.png",
+      "path": "icons/whistle_long_Normal.png",
       "filename": "whistle_long_Normal.png"
     },
     "air_pump": {
-      "path": "/Users/gq/projs/Z21/icons/air_pump_Normal.png",
+      "path": "icons/air_pump_Normal.png",
       "filename": "air_pump_Normal.png"
     },
     "drainage": {
-      "path": "/Users/gq/projs/Z21/icons/drainage_Normal.png",
+      "path": "icons/drainage_Normal.png",
       "filename": "drainage_Normal.png"
     },
     "diesel_regulation_step_down": {
-      "path": "/Users/gq/projs/Z21/icons/diesel_regulation_step_down_Normal.png",
+      "path": "icons/diesel_regulation_step_down_Normal.png",
       "filename": "diesel_regulation_step_down_Normal.png"
     },
     "rail_kick": {
-      "path": "/Users/gq/projs/Z21/icons/rail_kick_Normal.png",
+      "path": "icons/rail_kick_Normal.png",
       "filename": "rail_kick_Normal.png"
     },
     "curve_sound": {
-      "path": "/Users/gq/projs/Z21/icons/curve_sound_Normal.png",
+      "path": "icons/curve_sound_Normal.png",
       "filename": "curve_sound_Normal.png"
     },
     "handbrake": {
-      "path": "/Users/gq/projs/Z21/icons/handbrake_Normal.png",
+      "path": "icons/handbrake_Normal.png",
       "filename": "handbrake_Normal.png"
     },
     "hump_gear": {
-      "path": "/Users/gq/projs/Z21/icons/hump_gear_Normal.png",
+      "path": "icons/hump_gear_Normal.png",
       "filename": "hump_gear_Normal.png"
     },
     "scoop_coal": {
-      "path": "/Users/gq/projs/Z21/icons/scoop_coal_Normal.png",
+      "path": "icons/scoop_coal_Normal.png",
       "filename": "scoop_coal_Normal.png"
     },
     "sound1": {
-      "path": "/Users/gq/projs/Z21/icons/sound1_Normal.png",
+      "path": "icons/sound1_Normal.png",
       "filename": "sound1_Normal.png"
     },
     "door_close": {
-      "path": "/Users/gq/projs/Z21/icons/door_close_Normal.png",
+      "path": "icons/door_close_Normal.png",
       "filename": "door_close_Normal.png"
     },
     "cycle_light": {
-      "path": "/Users/gq/projs/Z21/icons/cycle_light_Normal.png",
+      "path": "icons/cycle_light_Normal.png",
       "filename": "cycle_light_Normal.png"
     },
     "compressor": {
-      "path": "/Users/gq/projs/Z21/icons/compressor_Normal.png",
+      "path": "icons/compressor_Normal.png",
       "filename": "compressor_Normal.png"
     },
     "bell": {
-      "path": "/Users/gq/projs/Z21/icons/bell_Normal.png",
+      "path": "icons/bell_Normal.png",
       "filename": "bell_Normal.png"
     },
     "horn_two_sound": {
-      "path": "/Users/gq/projs/Z21/icons/horn_two_sound_Normal.png",
+      "path": "icons/horn_two_sound_Normal.png",
       "filename": "horn_two_sound_Normal.png"
     },
     "puffer_kick": {
-      "path": "/Users/gq/projs/Z21/icons/puffer_kick_Normal.png",
+      "path": "icons/puffer_kick_Normal.png",
       "filename": "puffer_kick_Normal.png"
     },
     "clef": {
-      "path": "/Users/gq/projs/Z21/icons/clef_Normal.png",
+      "path": "icons/clef_Normal.png",
       "filename": "clef_Normal.png"
     },
     "cabin_light": {
-      "path": "/Users/gq/projs/Z21/icons/cabin_light_Normal.png",
+      "path": "icons/cabin_light_Normal.png",
       "filename": "cabin_light_Normal.png"
     },
     "couple": {
-      "path": "/Users/gq/projs/Z21/icons/couple_Normal.png",
+      "path": "icons/couple_Normal.png",
       "filename": "couple_Normal.png"
     },
     "dump_steam": {
-      "path": "/Users/gq/projs/Z21/icons/dump_steam_Normal.png",
+      "path": "icons/dump_steam_Normal.png",
       "filename": "dump_steam_Normal.png"
     },
     "sound_brake": {
-      "path": "/Users/gq/projs/Z21/icons/sound_brake_Normal.png",
+      "path": "icons/sound_brake_Normal.png",
       "filename": "sound_brake_Normal.png"
     },
     "sanden": {
-      "path": "/Users/gq/projs/Z21/icons/sanden_Normal.png",
+      "path": "icons/sanden_Normal.png",
       "filename": "sanden_Normal.png"
     },
     "drain_mud": {
-      "path": "/Users/gq/projs/Z21/icons/drain_mud_Normal.png",
+      "path": "icons/drain_mud_Normal.png",
       "filename": "drain_mud_Normal.png"
     },
     "cockpit_light_left": {
-      "path": "/Users/gq/projs/Z21/icons/cockpit_light_left_Normal.png",
+      "path": "icons/cockpit_light_left_Normal.png",
       "filename": "cockpit_light_left_Normal.png"
     },
     "diesel_regulation_step_up": {
-      "path": "/Users/gq/projs/Z21/icons/diesel_regulation_step_up_Normal.png",
+      "path": "icons/diesel_regulation_step_up_Normal.png",
       "filename": "diesel_regulation_step_up_Normal.png"
     },
     "door_open": {
-      "path": "/Users/gq/projs/Z21/icons/door_open_Normal.png",
+      "path": "icons/door_open_Normal.png",
       "filename": "door_open_Normal.png"
     },
     "back_light": {
-      "path": "/Users/gq/projs/Z21/icons/back_light_Normal.png",
+      "path": "icons/back_light_Normal.png",
       "filename": "back_light_Normal.png"
     },
     "light": {
-      "path": "/Users/gq/projs/Z21/icons/light_Normal.png",
+      "path": "icons/light_Normal.png",
       "filename": "light_Normal.png"
     },
     "main_beam2": {
-      "path": "/Users/gq/projs/Z21/icons/main_beam2_Normal.png",
+      "path": "icons/main_beam2_Normal.png",
       "filename": "main_beam2_Normal.png"
     },
     "hump_funk": {
-      "path": "/Users/gq/projs/Z21/icons/hump_funk_Normal.png",
+      "path": "icons/hump_funk_Normal.png",
       "filename": "hump_funk_Normal.png"
     },
     "interior_light": {
-      "path": "/Users/gq/projs/Z21/icons/interior_light_Normal.png",
+      "path": "icons/interior_light_Normal.png",
       "filename": "interior_light_Normal.png"
     },
     "preheat": {
-      "path": "/Users/gq/projs/Z21/icons/preheat_Normal.png",
+      "path": "icons/preheat_Normal.png",
       "filename": "preheat_Normal.png"
     },
     "valve": {
-      "path": "/Users/gq/projs/Z21/icons/valve_Normal.png",
+      "path": "icons/valve_Normal.png",
       "filename": "valve_Normal.png"
     },
     "weight": {
-      "path": "/Users/gq/projs/Z21/icons/weight_Normal.png",
+      "path": "icons/weight_Normal.png",
       "filename": "weight_Normal.png"
     },
     "mute": {
-      "path": "/Users/gq/projs/Z21/icons/mute_Normal.png",
+      "path": "icons/mute_Normal.png",
       "filename": "mute_Normal.png"
     },
     "bugle": {
-      "path": "/Users/gq/projs/Z21/icons/bugle_Normal.png",
+      "path": "icons/bugle_Normal.png",
       "filename": "bugle_Normal.png"
     },
     "injector": {
-      "path": "/Users/gq/projs/Z21/icons/injector_Normal.png",
+      "path": "icons/injector_Normal.png",
       "filename": "injector_Normal.png"
     },
     "firebox": {
-      "path": "/Users/gq/projs/Z21/icons/firebox_Normal.png",
+      "path": "icons/firebox_Normal.png",
       "filename": "firebox_Normal.png"
     },
     "forward_take_power": {
-      "path": "/Users/gq/projs/Z21/icons/forward_take_power_on_Normal.png",
+      "path": "icons/forward_take_power_on_Normal.png",
       "filename": "forward_take_power_on_Normal.png"
     },
     "horn_high": {
-      "path": "/Users/gq/projs/Z21/icons/horn_high_Normal.png",
+      "path": "icons/horn_high_Normal.png",
       "filename": "horn_high_Normal.png"
     },
     "main": {
-      "path": "/Users/gq/projs/Z21/icons/main_beam2_Normal.png",
+      "path": "icons/main_beam2_Normal.png",
       "filename": "main_beam2_Normal.png"
     },
     "whistle_short": {
-      "path": "/Users/gq/projs/Z21/icons/whistle_short_Normal.png",
+      "path": "icons/whistle_short_Normal.png",
       "filename": "whistle_short_Normal.png"
     },
     "blower": {
-      "path": "/Users/gq/projs/Z21/icons/blower_Normal.png",
+      "path": "icons/blower_Normal.png",
       "filename": "blower_Normal.png"
     },
     "drain_valve": {
-      "path": "/Users/gq/projs/Z21/icons/drain_valve_Normal.png",
+      "path": "icons/drain_valve_Normal.png",
       "filename": "drain_valve_Normal.png"
     },
     "diesel_generator": {
-      "path": "/Users/gq/projs/Z21/icons/diesel_generator_Normal.png",
+      "path": "icons/diesel_generator_Normal.png",
       "filename": "diesel_generator_Normal.png"
     },
     "tish_lamp": {
-      "path": "/Users/gq/projs/Z21/icons/tish_lamp_Normal.png",
+      "path": "icons/tish_lamp_Normal.png",
       "filename": "tish_lamp_Normal.png"
     },
     "generator": {
-      "path": "/Users/gq/projs/Z21/icons/generator_Normal.png",
+      "path": "icons/generator_Normal.png",
       "filename": "generator_Normal.png"
     },
     "horn_low": {
-      "path": "/Users/gq/projs/Z21/icons/horn_low_Normal.png",
+      "path": "icons/horn_low_Normal.png",
       "filename": "horn_low_Normal.png"
     },
     "rail_crossing": {
-      "path": "/Users/gq/projs/Z21/icons/rail_crossing_Normal.png",
+      "path": "icons/rail_crossing_Normal.png",
       "filename": "rail_crossing_Normal.png"
     },
     "scoop_coal_sound": {
-      "path": "/Users/gq/projs/Z21/icons/scoop_coal_sound_Normal.png",
+      "path": "icons/scoop_coal_sound_Normal.png",
       "filename": "scoop_coal_sound_Normal.png"
     },
     "louder": {
-      "path": "/Users/gq/projs/Z21/icons/louder_Normal.png",
+      "path": "icons/louder_Normal.png",
       "filename": "louder_Normal.png"
     },
     "light2": {
-      "path": "/Users/gq/projs/Z21/icons/light2_Normal.png",
+      "path": "icons/light2_Normal.png",
       "filename": "light2_Normal.png"
     },
     "main_beam": {
-      "path": "/Users/gq/projs/Z21/icons/main_beam_Normal.png",
+      "path": "icons/main_beam_Normal.png",
       "filename": "main_beam_Normal.png"
     },
     "shaking_grates": {
-      "path": "/Users/gq/projs/Z21/icons/shaking_grates_Normal.png",
+      "path": "icons/shaking_grates_Normal.png",
       "filename": "shaking_grates_Normal.png"
     },
     "steam": {
-      "path": "/Users/gq/projs/Z21/icons/steam_Normal.png",
+      "path": "icons/steam_Normal.png",
       "filename": "steam_Normal.png"
     },
     "all_round_light": {
-      "path": "/Users/gq/projs/Z21/icons/all_round_light_Normal.png",
+      "path": "icons/all_round_light_Normal.png",
       "filename": "all_round_light_Normal.png"
     },
     "sound4": {
-      "path": "/Users/gq/projs/Z21/icons/sound4_Normal.png",
+      "path": "icons/sound4_Normal.png",
       "filename": "sound4_Normal.png"
     },
     "fan": {
-      "path": "/Users/gq/projs/Z21/icons/fan_Normal.png",
+      "path": "icons/fan_Normal.png",
       "filename": "fan_Normal.png"
     },
     "sound3": {
-      "path": "/Users/gq/projs/Z21/icons/sound3_Normal.png",
+      "path": "icons/sound3_Normal.png",
       "filename": "sound3_Normal.png"
     },
     "coach_side_light_off_2": {
-      "path": "/Users/gq/projs/Z21/icons/coach_side_light_off_2_Normal.png",
+      "path": "icons/coach_side_light_off_2_Normal.png",
       "filename": "coach_side_light_off_2_Normal.png"
     },
     "cockpit_light_right": {
-      "path": "/Users/gq/projs/Z21/icons/cockpit_light_right_Normal.png",
+      "path": "icons/cockpit_light_right_Normal.png",
       "filename": "cockpit_light_right_Normal.png"
     },
     "quiter": {
-      "path": "/Users/gq/projs/Z21/icons/quiter_Normal.png",
+      "path": "icons/quiter_Normal.png",
       "filename": "quiter_Normal.png"
     },
+    "sound5": {
+      "path": "icons/conductor_signal.png",
+      "filename": "conductor_signal.png"
+    },
     "backward_take_power": {
-      "path": "/Users/gq/projs/Z21/icons/backward_take_power_on_Normal.png",
+      "path": "icons/backward_take_power_on_Normal.png",
       "filename": "backward_take_power_on_Normal.png"
     },
     "feed_pump": {
-      "path": "/Users/gq/projs/Z21/icons/feed_pump_Normal.png",
+      "path": "icons/feed_pump_Normal.png",
       "filename": "feed_pump_Normal.png"
     },
     "coach_side_light_off": {
-      "path": "/Users/gq/projs/Z21/icons/coach_side_light_off_Normal.png",
+      "path": "icons/coach_side_light_off_Normal.png",
       "filename": "coach_side_light_off_Normal.png"
+    },
+    "alternator": {
+      "path": "icons/dynamo_Normal.png",
+      "filename": "dynamo_Normal.png"
     }
   }
 }

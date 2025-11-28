@@ -31,15 +31,15 @@ This project successfully parses both formats and provides tools for inspection 
 1. **Clone the repository** (or navigate to the project directory)
 
 2. **Create a virtual environment**:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
 3. **Install dependencies**:
    ```bash
-   pip install -r requirements.txt
-   ```
+pip install -r requirements.txt
+```
 
 ## 📖 Usage
 

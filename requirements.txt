@@ -1,13 +1,16 @@
 # Python dependencies for Z21 file reader/writer
 
 # Core dependencies
-# struct and pathlib are built-in, no need to install
+# struct, pathlib, json, re, tempfile, zipfile, sqlite3, uuid, subprocess,
+# platform, os, xml.etree.ElementTree, dataclasses, typing, argparse, 
+# collections, hashlib, shutil, tkinter are built-in, no need to install
+
+# Required for GUI application
+customtkinter>=5.0.0
+Pillow>=9.0.0  # PIL - Required for image processing in GUI
 
 # Optional: For better CLI experience
 click>=8.0.0
-
-# Optional: For data validation
-# pydantic>=2.0.0
 
 # Optional: For testing
 pytest>=7.0.0
@@ -20,9 +23,5 @@ hexdump>=3.3
 pytesseract>=0.3.10
 pdf2image>=1.16.3
 
-# Optional: For AI-based function extraction
-openai>=1.0.0
-
-# GUI library
-customtkinter>=5.0.0
-
+# Optional: For macOS AirDrop sharing (macOS only)
+pyobjc-framework-AppKit>=9.0.0  # macOS only - Required for AirDrop sharing feature

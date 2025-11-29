@@ -4,6 +4,18 @@ GUI application to browse Z21 locomotives and their details.
 """
 
 import sys
+import os
+import warnings
+
+# Suppress macOS-specific warnings that don't affect functionality
+if sys.platform == 'darwin':
+    # Suppress IMKCFRunLoopWakeUpReliable mach port warnings
+    os.environ['PYTHONWARNINGS'] = 'ignore'
+    # Filter specific macOS warnings
+    warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*IMKCFRunLoopWakeUpReliable.*')
+    warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*NSOpenPanel.*overrides.*method.*')
+    warnings.filterwarnings('ignore', message='.*The class.*NSOpenPanel.*overrides the method.*')
+
 import customtkinter as ctk
 from tkinter import messagebox, filedialog, scrolledtext
 from pathlib import Path
@@ -16,7 +28,6 @@ import sqlite3
 import uuid
 import subprocess
 import platform
-import os
 
 # Try to import PyObjC for macOS sharing
 try:
@@ -32,9 +43,6 @@ try:
 except ImportError:
     HAS_PIL = False
 
-# Try to import PaddleOCR
-# Fix OpenMP library conflict on macOS (must be set before importing PaddleOCR)
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -1039,49 +1047,397 @@ Function Details:  {len(loco.function_details)} available
         self.overview_text.configure(state="disabled")
 
     def scan_for_details(self):
-        """Scan image or PDF for locomotive details and auto-fill fields."""
+        """Scan image, PDF, or JSON file for locomotive details and auto-fill fields."""
         if not self.current_loco:
             messagebox.showerror("Error", "Please select a locomotive first.")
             return
 
         file_path = filedialog.askopenfilename(
-            title="Select Image or PDF to Scan",
-            filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif *.bmp *.tiff"), ("PDF files", "*.pdf"), ("All files", "*.*")],
+            title="Select Image, PDF, or JSON File",
+            filetypes=[
+                ("Image files", "*.png *.jpg *.jpeg *.gif *.bmp *.tiff"),
+                ("PDF files", "*.pdf"),
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
+            ],
         )
         if not file_path:
             return
 
+        file_path_obj = Path(file_path)
+        
         try:
-            self.status_label.configure(text="Scanning document...")
-            self.root.update()
-            extracted_text = self.extract_text_from_file(file_path)
-            if not extracted_text:
-                messagebox.showwarning("Warning", "No text could be extracted from the document.")
+            # Check if it's a JSON file
+            if file_path_obj.suffix.lower() == ".json":
+                self.status_label.configure(text="Reading JSON file...")
+                self.root.update()
+                self.load_from_json_file(file_path_obj)
                 self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
-                return
+            else:
+                # Use OCR for image/PDF files
+                self.status_label.configure(text="Scanning document...")
+                self.root.update()
+                extracted_text = self.extract_text_from_file(file_path)
+                if not extracted_text:
+                    messagebox.showwarning("Warning", "No text could be extracted from the document.")
+                    self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
+                    return
 
-            self.parse_and_fill_fields(extracted_text)
-            messagebox.showinfo("Success", "Details extracted and filled from document!")
-            self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
+                # Show OCR result in a dialog before filling fields
+                self.show_ocr_result_dialog(extracted_text, file_path)
+                self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to scan document: {e}")
             self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
 
-    def extract_text_from_file(self, file_path: str) -> str:
-        """Extract text from image or PDF using OCR."""
-        file_path = Path(file_path)
-        if HAS_PADDLEOCR:
+    def load_from_json_file(self, file_path: Path):
+        """Load locomotive details from a JSON file and fill fields (only non-empty values)."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            messagebox.showerror("JSON Error", f"Invalid JSON file: {e}")
+            return
+        except Exception as e:
+            messagebox.showerror("File Error", f"Failed to read JSON file: {e}")
+            return
+        
+        # Handle different JSON structures
+        loco_data = None
+        
+        # Case 1: JSON contains a single locomotive object
+        if isinstance(data, dict):
+            # Check if it's a locomotive object (has 'address' or 'name')
+            if 'address' in data or 'name' in data:
+                loco_data = data
+            # Case 2: JSON contains a list of locomotives, use first one
+            elif 'locomotives' in data and isinstance(data['locomotives'], list) and len(data['locomotives']) > 0:
+                loco_data = data['locomotives'][0]
+        # Case 3: JSON is a list of locomotives, use first one
+        elif isinstance(data, list) and len(data) > 0:
+            loco_data = data[0]
+        
+        if not loco_data:
+            messagebox.showwarning("Warning", "No locomotive data found in JSON file.")
+            return
+        
+        # Helper function to get JSON value supporting both camelCase and snake_case field names
+        def get_json_value(key_camel, key_snake=None):
+            """Get value from JSON using camelCase or snake_case key, with camelCase priority."""
+            if key_snake is None:
+                key_snake = key_camel
+            # Try camelCase first (for de_18.json format), then snake_case (for backward compatibility)
+            return loco_data.get(key_camel) or loco_data.get(key_snake) or loco_data.get(key_camel.lower()) or loco_data.get(key_snake.lower())
+        
+        # Fill fields only if JSON value is not empty (None, empty string, empty list, empty dict)
+        def is_empty(value):
+            """Check if a value is considered empty."""
+            if value is None:
+                return True
+            if isinstance(value, str) and value.strip() == "":
+                return True
+            if isinstance(value, (list, dict)) and len(value) == 0:
+                return True
+            return False
+        
+        # Fill name (only if JSON has value and current field is empty)
+        name_value = get_json_value('name')
+        if name_value and not is_empty(name_value):
+            if not self.name_var.get().strip():
+                self.name_var.set(str(name_value))
+        
+        # Fill address (only if JSON has value and current field is empty)
+        address_value = get_json_value('address')
+        if address_value and not is_empty(address_value):
+            if not self.address_var.get().strip():
+                try:
+                    addr_str = str(address_value).strip()
+                    if addr_str:
+                        addr = int(addr_str)
+                        if 1 <= addr <= 9999:
+                            self.address_var.set(str(addr))
+                except (ValueError, TypeError):
+                    pass
+        
+        # Fill speed (only if JSON has value and current field is empty)
+        # Support both 'maxSpeed' (camelCase) and 'speed' (snake_case)
+        speed_value = get_json_value('maxSpeed', 'speed')
+        if speed_value and not is_empty(speed_value):
+            if not self.speed_var.get().strip():
+                try:
+                    speed_str = str(speed_value).strip()
+                    # Remove units like "km/h", "kmh", etc.
+                    speed_str = re.sub(r'\s*(km/h|kmh|mph|km|m/h).*$', '', speed_str, flags=re.IGNORECASE)
+                    if speed_str:
+                        speed = int(float(speed_str))
+                        if 0 <= speed <= 300:
+                            self.speed_var.set(str(speed))
+                except (ValueError, TypeError):
+                    pass
+        
+        # Fill direction (only if JSON has value and current field is empty)
+        direction_value = get_json_value('direction')
+        if direction_value and not is_empty(direction_value):
+            if not self.direction_var.get():
+                if isinstance(direction_value, bool):
+                    self.direction_var.set("Forward" if direction_value else "Reverse")
+                elif isinstance(direction_value, str):
+                    dir_str = direction_value.lower()
+                    if dir_str in ['forward', 'fwd', 'f', 'true', '1']:
+                        self.direction_var.set("Forward")
+                    elif dir_str in ['reverse', 'rev', 'r', 'false', '0']:
+                        self.direction_var.set("Reverse")
+        
+        # Fill full_name (only if JSON has value and current field is empty)
+        # Support both 'fullName' (camelCase) and 'full_name' (snake_case)
+        full_name_value = get_json_value('fullName', 'full_name')
+        if full_name_value and not is_empty(full_name_value):
+            if not self.full_name_var.get().strip():
+                self.full_name_var.set(str(full_name_value))
+        
+        # Fill railway (only if JSON has value, update regardless of current field value)
+        railway_value = get_json_value('railway')
+        if railway_value and not is_empty(railway_value):
+            self.railway_var.set(str(railway_value))
+        
+        # Fill article_number (only if JSON has value and current field is empty)
+        # Support both 'articleNumber' (camelCase) and 'article_number' (snake_case)
+        article_number_value = get_json_value('articleNumber', 'article_number')
+        if article_number_value and not is_empty(article_number_value):
+            if not self.article_number_var.get().strip():
+                self.article_number_var.set(str(article_number_value))
+        
+        # Fill decoder_type (only if JSON has value, update regardless of current field value)
+        # Support both 'decoderType' (camelCase) and 'decoder_type' (snake_case)
+        decoder_type_value = get_json_value('decoderType', 'decoder_type')
+        if decoder_type_value and not is_empty(decoder_type_value):
+            self.decoder_type_var.set(str(decoder_type_value))
+        
+        # Fill build_year (only if JSON has value and current field is empty)
+        # Support both 'buildYear' (camelCase) and 'build_year' (snake_case)
+        build_year_value = get_json_value('buildYear', 'build_year')
+        if build_year_value and not is_empty(build_year_value):
+            if not self.build_year_var.get().strip():
+                try:
+                    year_str = str(build_year_value).strip()
+                    if year_str:
+                        year = int(year_str)
+                        if 1900 <= year <= 2100:
+                            self.build_year_var.set(str(year))
+                except (ValueError, TypeError):
+                    pass
+        
+        # Fill model_buffer_length (only if JSON has value and current field is empty)
+        # Support both 'modelBufferLength' (camelCase) and 'model_buffer_length' (snake_case)
+        model_buffer_length_value = get_json_value('modelBufferLength', 'model_buffer_length')
+        if model_buffer_length_value and not is_empty(model_buffer_length_value):
+            if not self.model_buffer_length_var.get().strip():
+                self.model_buffer_length_var.set(str(model_buffer_length_value))
+        
+        # Fill service_weight (only if JSON has value and current field is empty)
+        # Support both 'serviceWeight' (camelCase) and 'service_weight' (snake_case)
+        service_weight_value = get_json_value('serviceWeight', 'service_weight')
+        if service_weight_value and not is_empty(service_weight_value):
+            if not self.service_weight_var.get().strip():
+                self.service_weight_var.set(str(service_weight_value))
+        
+        # Fill model_weight (only if JSON has value and current field is empty)
+        # Support both 'modelWeight' (camelCase) and 'model_weight' (snake_case)
+        model_weight_value = get_json_value('modelWeight', 'model_weight')
+        if model_weight_value and not is_empty(model_weight_value):
+            if not self.model_weight_var.get().strip():
+                self.model_weight_var.set(str(model_weight_value))
+        
+        # Fill rmin (minimum radius) (only if JSON has value and current field is empty)
+        # Support both 'minimumRadius' (camelCase) and 'rmin' (snake_case)
+        rmin_value = get_json_value('minimumRadius', 'rmin')
+        if rmin_value and not is_empty(rmin_value):
+            if not self.rmin_var.get().strip():
+                self.rmin_var.set(str(rmin_value))
+        
+        # Fill ip (only if JSON has value and current field is empty)
+        # Support both 'ipAddress' (camelCase) and 'ip' (snake_case)
+        ip_value = get_json_value('ipAddress', 'ip')
+        if ip_value and not is_empty(ip_value):
+            if not self.ip_var.get().strip():
+                self.ip_var.set(str(ip_value))
+        
+        # Fill drivers_cab (only if JSON has value and current field is empty)
+        # Support both 'driversCab' (camelCase) and 'drivers_cab' (snake_case)
+        drivers_cab_value = get_json_value('driversCab', 'drivers_cab')
+        if drivers_cab_value and not is_empty(drivers_cab_value):
+            if not self.drivers_cab_var.get().strip():
+                self.drivers_cab_var.set(str(drivers_cab_value))
+        
+        # Fill description (only if JSON has value and current field is empty)
+        description_value = get_json_value('description')
+        if description_value and not is_empty(description_value):
+            current_desc = self.description_text.get(1.0, "end").strip()
+            if not current_desc:
+                self.description_text.delete(1.0, "end")
+                self.description_text.insert(1.0, str(description_value))
+        
+        # Update the locomotive object with the new values from GUI fields
+        if self.current_loco:
+            fields_updated = []
             try:
-                print("Attempting to use PaddleOCR...")
-                return self._extract_text_with_paddleocr(file_path)
+                # Update locomotive object from GUI fields (only if fields have values)
+                name_val = self.name_var.get().strip()
+                if name_val:
+                    self.current_loco.name = name_val
+                    fields_updated.append("name")
+                
+                address_val = self.address_var.get().strip()
+                if address_val:
+                    try:
+                        self.current_loco.address = int(address_val)
+                        fields_updated.append("address")
+                    except (ValueError, TypeError):
+                        pass
+                
+                speed_val = self.speed_var.get().strip()
+                if speed_val:
+                    try:
+                        self.current_loco.speed = int(speed_val)
+                        fields_updated.append("speed")
+                    except (ValueError, TypeError):
+                        pass
+                
+                if self.direction_var.get():
+                    self.current_loco.direction = self.direction_var.get() == "Forward"
+                    fields_updated.append("direction")
+                
+                full_name_val = self.full_name_var.get().strip()
+                if full_name_val:
+                    self.current_loco.full_name = full_name_val
+                    fields_updated.append("full_name")
+                
+                railway_val = self.railway_var.get().strip()
+                if railway_val:
+                    self.current_loco.railway = railway_val
+                    fields_updated.append("railway")
+                
+                article_number_val = self.article_number_var.get().strip()
+                if article_number_val:
+                    self.current_loco.article_number = article_number_val
+                    fields_updated.append("article_number")
+                
+                decoder_type_val = self.decoder_type_var.get().strip()
+                if decoder_type_val:
+                    self.current_loco.decoder_type = decoder_type_val
+                    fields_updated.append("decoder_type")
+                
+                build_year_val = self.build_year_var.get().strip()
+                if build_year_val:
+                    self.current_loco.build_year = build_year_val
+                    fields_updated.append("build_year")
+                
+                model_buffer_length_val = self.model_buffer_length_var.get().strip()
+                if model_buffer_length_val:
+                    self.current_loco.model_buffer_length = model_buffer_length_val
+                    fields_updated.append("model_buffer_length")
+                
+                service_weight_val = self.service_weight_var.get().strip()
+                if service_weight_val:
+                    self.current_loco.service_weight = service_weight_val
+                    fields_updated.append("service_weight")
+                
+                model_weight_val = self.model_weight_var.get().strip()
+                if model_weight_val:
+                    self.current_loco.model_weight = model_weight_val
+                    fields_updated.append("model_weight")
+                
+                rmin_val = self.rmin_var.get().strip()
+                if rmin_val:
+                    self.current_loco.rmin = rmin_val
+                    fields_updated.append("rmin")
+                
+                ip_val = self.ip_var.get().strip()
+                if ip_val:
+                    self.current_loco.ip = ip_val
+                    fields_updated.append("ip")
+                
+                drivers_cab_val = self.drivers_cab_var.get().strip()
+                if drivers_cab_val:
+                    self.current_loco.drivers_cab = drivers_cab_val
+                    fields_updated.append("drivers_cab")
+                
+                desc_text = self.description_text.get(1.0, "end").strip()
+                if desc_text:
+                    self.current_loco.description = desc_text
+                    fields_updated.append("description")
+                
+                if fields_updated:
+                    self.set_status_message(f"Locomotive data updated from JSON: {len(fields_updated)} field(s) updated")
+                else:
+                    self.set_status_message("JSON loaded: No fields updated (all fields already have values or JSON fields are empty)")
             except Exception as e:
-                print(f"PaddleOCR failed/skipped: {e}, trying pytesseract...")
+                self.set_status_message(f"Failed to update locomotive data from JSON: {e}")
+        else:
+            self.set_status_message("Failed to update locomotive: No locomotive selected")
+    
+    def show_ocr_result_dialog(self, extracted_text: str, file_path: str):
+        """Show OCR extracted text in a dialog and ask user to confirm before filling fields."""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("OCR Recognition Result")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Set dialog size
+        dialog.geometry("700x500")
+        dialog.minsize(600, 400)
+        
+        main_frame = ctk.CTkFrame(dialog)
+        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        # Title
+        title_label = ctk.CTkLabel(main_frame, text="OCR Recognition Result", font=("Arial", 14, "bold"))
+        title_label.pack(pady=(0, 10))
+        
+        # File path label
+        file_label = ctk.CTkLabel(main_frame, text=f"File: {Path(file_path).name}", font=("Arial", 10), text_color="gray")
+        file_label.pack(pady=(0, 10))
+        
+        # Scrollable text area
+        text_frame = ctk.CTkFrame(main_frame)
+        text_frame.pack(fill="both", expand=True, pady=(0, 15))
+        
+        text_widget = scrolledtext.ScrolledText(text_frame, wrap="word", width=80, height=20, font=("Courier", 10))
+        text_widget.pack(fill="both", expand=True, padx=5, pady=5)
+        text_widget.insert("1.0", extracted_text)
+        text_widget.configure(state="normal")  # Allow editing if needed
+        
+        # Buttons frame
+        button_frame = ctk.CTkFrame(main_frame)
+        button_frame.pack(fill="x", pady=(0, 0))
+        
+        def fill_fields():
+            """Fill fields with extracted text and close dialog."""
+            self.parse_and_fill_fields(extracted_text)
+            dialog.destroy()
+            messagebox.showinfo("Success", "Details extracted and filled from document!")
+        
+        def cancel():
+            """Close dialog without filling fields."""
+            dialog.destroy()
+        
+        ctk.CTkButton(button_frame, text="Fill Fields", command=fill_fields, width=120).pack(side="right", padx=(5, 0))
+        ctk.CTkButton(button_frame, text="Cancel", command=cancel, width=120).pack(side="right", padx=(5, 0))
+        
+        # Center dialog on screen
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
 
+    def extract_text_from_file(self, file_path: str) -> str:
+        """Extract text from image or PDF using OCR (pytesseract)."""
+        file_path = Path(file_path)
+        
         try:
             import pytesseract
         except ImportError:
-            if not HAS_PADDLEOCR:
-                messagebox.showerror("Missing Dependency", "No OCR library available.\nInstall PaddleOCR or pytesseract.")
+            messagebox.showerror("Missing Dependency", "pytesseract is required for OCR.\nPlease install it with: pip install pytesseract")
             return ""
 
         try:
@@ -1106,162 +1462,303 @@ Function Details:  {len(loco.function_details)} available
         except Exception as e:
             raise Exception(f"OCR failed: {e}")
 
-    def _extract_text_with_paddleocr(self, file_path: Path) -> str:
-        """Extract text using PaddleOCR."""
-        if not HAS_PIL:
-            raise Exception("PIL/Pillow is required for image processing.")
-        
-        try:
-            ocr = PaddleOCR(lang="en")
-        except Exception:
-            try:
-                ocr = PaddleOCR(use_textline_orientation=True, lang="en")
-            except Exception:
-                try:
-                    ocr = PaddleOCR(use_angle_cls=True, lang="en")
-                except Exception as e:
-                    raise Exception(f"Failed to initialize PaddleOCR: {e}")
-
-        if file_path.suffix.lower() == ".pdf":
-            try:
-                from pdf2image import convert_from_path
-            except ImportError:
-                raise Exception("pdf2image is required for PDF processing.")
-            images = convert_from_path(str(file_path))
-            text_parts = []
-            for image in images:
-                import numpy as np
-                img_array = np.array(image)
-                try:
-                    result = ocr.predict(img_array)
-                except (AttributeError, TypeError):
-                    try:
-                        result = ocr.ocr(img_array)
-                    except TypeError:
-                        result = ocr.ocr(img_array, cls=False)
-                
-                page_text = []
-                if result and result[0]:
-                    for line in result[0]:
-                        if line and len(line) >= 2 and line[1]:
-                            page_text.append(line[1][0])
-                if page_text:
-                    text_parts.append("\n".join(page_text))
-            return "\n".join(text_parts)
-        else:
-            image = Image.open(file_path)
-            import numpy as np
-            img_array = np.array(image)
-            try:
-                result = ocr.predict(img_array)
-            except (AttributeError, TypeError):
-                try:
-                    result = ocr.ocr(img_array)
-                except TypeError:
-                    result = ocr.ocr(img_array, cls=False)
-            
-            text_lines = []
-            if result and result[0]:
-                for line in result[0]:
-                    if line and len(line) >= 2 and line[1]:
-                        text_lines.append(line[1][0])
-            return "\n".join(text_lines)
-
     def parse_and_fill_fields(self, text: str):
-        """Parse extracted text and fill locomotive fields."""
+        """Parse extracted text and fill locomotive fields with improved intelligence."""
+        # Normalize text: fix common OCR errors and clean up
+        text_original = text
         text = text.upper()
         
-        name_patterns = [r"\bBR\s*(\d+)\b", r"\b(\d{4})\b"]
+        # Fix common OCR errors: O -> 0, I -> 1, S -> 5 (only in numeric contexts)
+        # But preserve text context
+        text_normalized = text
+        
+        # Extract name - improved patterns
+        name_patterns = [
+            r"\bBR\s*(\d+)\b",  # BR 218
+            r"\bCLASS\s*(\d+)\b",  # Class 218
+            r"\bBAUREIHE\s*(\d+)\b",  # Baureihe 218 (German)
+            r"\bSERIES\s*(\d+)\b",  # Series 218
+            r"\b(\d{3,4})\b",  # 3-4 digit numbers (likely BR numbers)
+            r"\b([A-Z]{1,2}\s*\d{2,4})\b",  # Like "BR 218", "V 200"
+        ]
         if not self.name_var.get():
             for pattern in name_patterns:
                 match = re.search(pattern, text)
-                if match and len(match.group(0).strip()) <= 20:
-                    self.name_var.set(match.group(0).strip())
-                    break
+                if match:
+                    name = match.group(0).strip()
+                    # Validate: reasonable length and not just random numbers
+                    if 2 <= len(name) <= 20:
+                        # Prefer BR format if available
+                        if "BR" in name or "CLASS" in name or "BAUREIHE" in name:
+                            self.name_var.set(name)
+                            break
+                        # Otherwise check if it's a reasonable locomotive number
+                        elif re.match(r"^\d{3,4}$", name) or re.match(r"^[A-Z]{1,2}\s*\d{2,4}$", name):
+                            self.name_var.set(name)
+                            break
 
-        address_patterns = [r"\bADDRESS[:\s]+(\d+)\b", r"\bLOCO\s*ADDRESS[:\s]+(\d+)\b", r"\bADDR[:\s]+(\d+)\b"]
+        # Extract address - improved patterns with better context
+        address_patterns = [
+            r"\b(?:DCC\s*)?ADDRESS[:\s]+(\d{1,4})\b",  # DCC Address: 123 or Address: 123
+            r"\bLOCO(?:MOTIVE)?\s*ADDRESS[:\s]+(\d{1,4})\b",  # Locomotive Address: 123
+            r"\bADDR[:\s]+(\d{1,4})\b",  # Addr: 123
+            r"\bADDR\.\s*(\d{1,4})\b",  # Addr. 123
+            r"\b#\s*(\d{1,4})\b",  # #123 (common format)
+            r"\bADDRESS\s*(\d{1,4})\b",  # Address 123 (no colon)
+        ]
         if not self.address_var.get():
             for pattern in address_patterns:
                 match = re.search(pattern, text)
                 if match:
-                    self.address_var.set(match.group(1))
-                    break
+                    addr_str = match.group(1)
+                    # Fix OCR errors: O -> 0, I -> 1
+                    addr_str = addr_str.replace("O", "0").replace("I", "1").replace("S", "5")
+                    try:
+                        addr = int(addr_str)
+                        if 1 <= addr <= 9999:  # Valid DCC address range
+                            self.address_var.set(str(addr))
+                            break
+                    except ValueError:
+                        continue
 
-        speed_patterns = [r"\bMAX\s*SPEED[:\s]+(\d+)\b", r"\bSPEED[:\s]+(\d+)\s*KM/H\b", r"\b(\d+)\s*KM/H\b", r"\bTOP\s*SPEED[:\s]+(\d+)\b"]
+        # Extract speed - improved patterns
+        speed_patterns = [
+            r"\bMAX(?:IMUM)?\s*SPEED[:\s]+(\d+)\b",  # Maximum Speed: 140
+            r"\bSPEED[:\s]+(\d+)\s*KM/H\b",  # Speed: 140 km/h
+            r"\b(\d+)\s*KM/H\b",  # 140 km/h
+            r"\bTOP\s*SPEED[:\s]+(\d+)\b",  # Top Speed: 140
+            r"\bVMAX[:\s]+(\d+)\b",  # Vmax: 140
+            r"\b(\d+)\s*KMH\b",  # 140 kmh (no slash)
+        ]
         if not self.speed_var.get():
             for pattern in speed_patterns:
                 match = re.search(pattern, text)
                 if match:
-                    speed = int(match.group(1))
-                    if 0 < speed <= 300:
-                        self.speed_var.set(str(speed))
+                    speed_str = match.group(1)
+                    # Fix OCR errors
+                    speed_str = speed_str.replace("O", "0").replace("I", "1").replace("S", "5")
+                    try:
+                        speed = int(speed_str)
+                        if 0 < speed <= 300:  # Reasonable speed range
+                            self.speed_var.set(str(speed))
+                            break
+                    except ValueError:
+                        continue
+
+        # Extract direction - NEW
+        direction_patterns = [
+            r"\bDIRECTION[:\s]+(FORWARD|REVERSE|FWD|REV)\b",
+            r"\b(FORWARD|REVERSE)\b",
+            r"\bDIR[:\s]+(F|R)\b",
+        ]
+        if not self.direction_var.get() or self.direction_var.get() == "Forward":
+            for pattern in direction_patterns:
+                match = re.search(pattern, text)
+                if match:
+                    dir_text = match.group(1).upper()
+                    if dir_text in ["FORWARD", "FWD", "F"]:
+                        self.direction_var.set("Forward")
+                        break
+                    elif dir_text in ["REVERSE", "REV", "R"]:
+                        self.direction_var.set("Reverse")
                         break
 
-        railway_patterns = [r"\bRAILWAY[:\s]+([A-Z][A-Z\s\.]+)\b", r"\bCOMPANY[:\s]+([A-Z][A-Z\s\.]+)\b", r"\b(K\.BAY\.STS\.B\.)\b", r"\b(DB|DR|SNCF|ÖBB)\b"]
+        # Extract railway - improved patterns
+        railway_patterns = [
+            r"\bRAILWAY[:\s]+([A-Z][A-Z\s\.]+?)(?:\s|$|\n)",  # Railway: DB
+            r"\bCOMPANY[:\s]+([A-Z][A-Z\s\.]+?)(?:\s|$|\n)",  # Company: DB
+            r"\b(K\.BAY\.STS\.B\.)",  # K.BAY.STS.B.
+            r"\b(DB|DR|SNCF|ÖBB|ÖBB|SBB|FS|NS|SNCB)\b",  # Common railway codes
+            r"\bBAHN[:\s]+([A-Z][A-Z\s\.]+?)(?:\s|$|\n)",  # Bahn: DB (German)
+        ]
         if not self.railway_var.get():
             for pattern in railway_patterns:
                 match = re.search(pattern, text)
-                if match and len(match.group(1).strip()) <= 50:
-                    self.railway_var.set(match.group(1).strip())
-                    break
+                if match:
+                    railway = match.group(1).strip()
+                    if len(railway) <= 50:
+                        self.railway_var.set(railway)
+                        break
 
-        article_patterns = [r"\bARTICLE[:\s]+(\d+)\b", r"\bART\.\s*NO[:\s]+(\d+)\b", r"\bPRODUCT[:\s]+(\d+)\b", r"\bITEM[:\s]+(\d+)\b"]
+        # Extract article number - improved with OCR error fixing
+        article_patterns = [
+            r"\bARTICLE[:\s]+(\d+)\b",
+            r"\bART\.\s*NO[:\s]+(\d+)\b",
+            r"\bART\.\s*NR[:\s]+(\d+)\b",  # German: Art. Nr.
+            r"\bPRODUCT[:\s]+(\d+)\b",
+            r"\bITEM[:\s]+(\d+)\b",
+            r"\bARTIKEL[:\s]+(\d+)\b",  # German
+        ]
         if not self.article_number_var.get():
             for pattern in article_patterns:
                 match = re.search(pattern, text)
                 if match:
-                    self.article_number_var.set(match.group(1))
+                    art_str = match.group(1)
+                    # Fix OCR errors
+                    art_str = art_str.replace("O", "0").replace("I", "1").replace("S", "5")
+                    self.article_number_var.set(art_str)
                     break
 
-        decoder_patterns = [r"\bDECODER[:\s]+([A-Z0-9\s]+)\b", r"\b(NEM\s*\d+)\b", r"\b(DCC\s*DECODER)\b"]
+        # Extract decoder type - improved patterns
+        decoder_patterns = [
+            r"\bDECODER[:\s]+([A-Z0-9\s\-]+?)(?:\s|$|\n)",  # Decoder: NEM 651
+            r"\b(NEM\s*\d{3})\b",  # NEM 651
+            r"\b(DCC\s*DECODER)\b",  # DCC Decoder
+            r"\b(DIGITAL\s*DECODER)\b",  # Digital Decoder
+            r"\bDECODER\s*TYPE[:\s]+([A-Z0-9\s\-]+?)(?:\s|$|\n)",  # Decoder Type: ...
+        ]
         if not self.decoder_type_var.get():
             for pattern in decoder_patterns:
                 match = re.search(pattern, text)
-                if match and len(match.group(1).strip()) <= 30:
-                    self.decoder_type_var.set(match.group(1).strip())
-                    break
+                if match:
+                    decoder = match.group(1).strip()
+                    if len(decoder) <= 30:
+                        self.decoder_type_var.set(decoder)
+                        break
 
-        year_patterns = [r"\bBUILD\s*YEAR[:\s]+(\d{4})\b", r"\bYEAR[:\s]+(\d{4})\b", r"\b(\d{4})\s*BUILD\b"]
+        # Extract build year - improved with validation
+        year_patterns = [
+            r"\bBUILD\s*YEAR[:\s]+(\d{4})\b",  # Build Year: 1980
+            r"\bYEAR[:\s]+(\d{4})\b",  # Year: 1980
+            r"\b(\d{4})\s*BUILD\b",  # 1980 Build
+            r"\bBAUJAHR[:\s]+(\d{4})\b",  # Baujahr: 1980 (German)
+            r"\bYEAR\s*OF\s*BUILD[:\s]+(\d{4})\b",  # Year of Build: 1980
+        ]
         if not self.build_year_var.get():
             for pattern in year_patterns:
                 match = re.search(pattern, text)
-                if match and 1900 <= int(match.group(1)) <= 2100:
-                    self.build_year_var.set(match.group(1))
-                    break
+                if match:
+                    year_str = match.group(1)
+                    # Fix OCR errors: O -> 0, I -> 1
+                    year_str = year_str.replace("O", "0").replace("I", "1")
+                    try:
+                        year = int(year_str)
+                        if 1900 <= year <= 2100:  # Reasonable year range
+                            self.build_year_var.set(str(year))
+                            break
+                    except ValueError:
+                        continue
 
-        weight_patterns = [r"\bWEIGHT[:\s]+(\d+(?:[.,]\d+)?)\s*(?:KG|G|T)?\b", r"\bSERVICE\s*WEIGHT[:\s]+(\d+(?:[.,]\d+)?)\b"]
+        # Extract service weight - improved patterns
+        weight_patterns = [
+            r"\b(?:SERVICE\s*)?WEIGHT[:\s]+(\d+(?:[.,]\d+)?)\s*(?:KG|G|T|TON)?\b",  # Weight: 85.5 kg
+            r"\bSERVICE\s*WEIGHT[:\s]+(\d+(?:[.,]\d+)?)\b",  # Service Weight: 85.5
+            r"\bGEWICHT[:\s]+(\d+(?:[.,]\d+)?)\s*(?:KG)?\b",  # Gewicht: 85.5 kg (German)
+            r"\bWEIGHT[:\s]+(\d+(?:[.,]\d+)?)\s*G\b",  # Weight: 85500 g
+        ]
         if not self.service_weight_var.get():
             for pattern in weight_patterns:
                 match = re.search(pattern, text)
                 if match:
-                    self.service_weight_var.set(match.group(1).replace(",", "."))
+                    weight_str = match.group(1)
+                    # Fix OCR errors and normalize decimal separator
+                    weight_str = weight_str.replace("O", "0").replace("I", "1").replace("S", "5")
+                    weight_str = weight_str.replace(",", ".")
+                    self.service_weight_var.set(weight_str)
                     break
 
-        radius_patterns = [r"\bMIN(?:IMUM)?\s*RADIUS[:\s]+(\d+(?:[.,]\d+)?)\b", r"\bRMIN[:\s]+(\d+(?:[.,]\d+)?)\b", r"\bRADIUS[:\s]+(\d+(?:[.,]\d+)?)\s*MM\b"]
+        # Extract minimum radius - improved patterns
+        radius_patterns = [
+            r"\bMIN(?:IMUM)?\s*RADIUS[:\s]+(\d+(?:[.,]\d+)?)\s*MM\b",  # Minimum Radius: 360 mm
+            r"\bRMIN[:\s]+(\d+(?:[.,]\d+)?)\s*MM\b",  # Rmin: 360 mm
+            r"\bRADIUS[:\s]+(\d+(?:[.,]\d+)?)\s*MM\b",  # Radius: 360 mm
+            r"\bMIN(?:IMUM)?\s*RADIUS[:\s]+(\d+(?:[.,]\d+)?)\b",  # Minimum Radius: 360
+            r"\bKURVENRADIUS[:\s]+(\d+(?:[.,]\d+)?)\s*MM\b",  # Kurvenradius: 360 mm (German)
+        ]
         if not self.rmin_var.get():
             for pattern in radius_patterns:
                 match = re.search(pattern, text)
                 if match:
-                    self.rmin_var.set(match.group(1).replace(",", "."))
+                    radius_str = match.group(1)
+                    # Fix OCR errors and normalize decimal separator
+                    radius_str = radius_str.replace("O", "0").replace("I", "1").replace("S", "5")
+                    radius_str = radius_str.replace(",", ".")
+                    self.rmin_var.set(radius_str)
                     break
 
-        ip_pattern = r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b"
+        # Extract IP address - improved validation
+        ip_patterns = [
+            r"\bIP[:\s]+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b",  # IP: 192.168.1.1
+            r"\bIP\s*ADDRESS[:\s]+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b",  # IP Address: 192.168.1.1
+            r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b",  # Just IP address
+        ]
         if not self.ip_var.get():
-            match = re.search(ip_pattern, text)
-            if match:
-                self.ip_var.set(match.group(1))
-
-        if not self.full_name_var.get():
-            lines = text.split("\n")
-            for line in lines[:10]:
-                line = line.strip()
-                if 20 <= len(line) <= 200 and not re.match(r"^\d+$", line):
-                    if any(keyword in line for keyword in ["LOCOMOTIVE", "LOCO", "TRAIN", "SET", "MODEL"]):
-                        self.full_name_var.set(line)
+            for pattern in ip_patterns:
+                match = re.search(pattern, text)
+                if match:
+                    ip = match.group(1)
+                    # Validate IP address format
+                    parts = ip.split(".")
+                    if len(parts) == 4 and all(0 <= int(p) <= 255 for p in parts if p.isdigit()):
+                        self.ip_var.set(ip)
                         break
 
+        # Extract full name - improved with better pattern matching
+        if not self.full_name_var.get():
+            # Try to find locomotive name in first few lines
+            lines = text_original.split("\n")  # Use original text to preserve case
+            for i, line in enumerate(lines[:15]):  # Check first 15 lines
+                line_clean = line.strip()
+                # Skip empty lines, pure numbers, or very short lines
+                if not line_clean or len(line_clean) < 10:
+                    continue
+                if re.match(r"^\d+$", line_clean):
+                    continue
+                
+                # Look for locomotive-related keywords (case-insensitive)
+                line_upper = line_clean.upper()
+                keywords = ["LOCOMOTIVE", "LOCO", "TRAIN", "SET", "MODEL", "BAUREIHE", "CLASS", "SERIES"]
+                if any(keyword in line_upper for keyword in keywords):
+                    # Found a line with locomotive keywords
+                    if 10 <= len(line_clean) <= 200:
+                        self.full_name_var.set(line_clean)
+                        break
+                # Also check if line looks like a locomotive name (starts with BR, Class, etc.)
+                elif re.match(r"^(BR|CLASS|BAUREIHE|SERIES)\s*\d+", line_upper):
+                    if 5 <= len(line_clean) <= 200:
+                        self.full_name_var.set(line_clean)
+                        break
+                # Or if it's a reasonably long line in the first few lines (likely title)
+                elif i < 5 and 15 <= len(line_clean) <= 100:
+                    # Check if it contains letters (not just numbers and symbols)
+                    if re.search(r"[A-Za-z]{3,}", line_clean):
+                        self.full_name_var.set(line_clean)
+                        break
+
+        # Extract description - improved with better text selection
         if not self.description_text.get(1.0, "end").strip():
-            paragraphs = [line.strip() for line in text.split("\n") if len(line.strip()) > 50]
+            # Find paragraphs that look like descriptions
+            lines = text_original.split("\n")  # Use original text
+            paragraphs = []
+            current_para = []
+            
+            for line in lines:
+                line_clean = line.strip()
+                # Skip very short lines, headers, or lines that look like field labels
+                if len(line_clean) < 20:
+                    if current_para and len(" ".join(current_para)) >= 50:
+                        paragraphs.append(" ".join(current_para))
+                    current_para = []
+                    continue
+                
+                # Skip lines that look like field labels (contain colons and are short)
+                if ":" in line_clean and len(line_clean) < 40:
+                    if current_para and len(" ".join(current_para)) >= 50:
+                        paragraphs.append(" ".join(current_para))
+                    current_para = []
+                    continue
+                
+                # Skip lines that are mostly numbers or special characters
+                if re.match(r"^[\d\s\.\-:]+$", line_clean):
+                    continue
+                
+                current_para.append(line_clean)
+            
+            # Add last paragraph if it exists
+            if current_para and len(" ".join(current_para)) >= 50:
+                paragraphs.append(" ".join(current_para))
+            
+            # Use first few substantial paragraphs
             if paragraphs:
                 description = "\n\n".join(paragraphs[:5])
                 if len(description) > 100:
@@ -1742,6 +2239,162 @@ Function Details:  {len(loco.function_details)} available
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export locomotive: {e}")
 
+    def _export_loco_to_temp_file(self, output_path: Path) -> bool:
+        """Export current locomotive to a temporary z21loco file. Returns True if successful."""
+        try:
+            export_uuid = str(uuid.uuid4()).upper()
+            export_dir = f"export/{export_uuid}"
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                export_path = temp_path / export_dir
+                export_path.mkdir(parents=True, exist_ok=True)
+
+                with zipfile.ZipFile(self.z21_file, "r") as input_zip:
+                    sqlite_files = [f for f in input_zip.namelist() if f.endswith(".sqlite")]
+                    if not sqlite_files:
+                        messagebox.showerror("Error", "No SQLite database found in source file.")
+                        return False
+                    sqlite_data = input_zip.read(sqlite_files[0])
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite") as tmp:
+                        tmp.write(sqlite_data)
+                        source_db_path = tmp.name
+
+                    try:
+                        source_db = sqlite3.connect(source_db_path)
+                        source_db.row_factory = sqlite3.Row
+                        source_cursor = source_db.cursor()
+                        
+                        new_db_path = export_path / "Loco.sqlite"
+                        new_db = sqlite3.connect(str(new_db_path))
+                        new_cursor = new_db.cursor()
+
+                        source_cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                        tables = [row[0] for row in source_cursor.fetchall()]
+                        for table in tables:
+                            source_cursor.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table}'")
+                            create_sql = source_cursor.fetchone()
+                            if create_sql and create_sql[0]: new_cursor.execute(create_sql[0])
+
+                        if "update_history" in tables:
+                            source_cursor.execute("SELECT * FROM update_history")
+                            for row in source_cursor.fetchall():
+                                columns = ", ".join(row.keys())
+                                placeholders = ", ".join(["?" for _ in row])
+                                new_cursor.execute(f"INSERT INTO update_history ({columns}) VALUES ({placeholders})", tuple(row))
+
+                        vehicle_id = getattr(self.current_loco, "_vehicle_id", None)
+                        if not vehicle_id:
+                            source_cursor.execute("SELECT id FROM vehicles WHERE type = 0 AND address = ?", (self.current_loco.address,))
+                            row = source_cursor.fetchone()
+                            if row: vehicle_id = row["id"]
+
+                        if not vehicle_id:
+                            new_cursor.execute("SELECT MAX(position) as max_pos FROM vehicles WHERE type = 0")
+                            max_pos_row = new_cursor.fetchone()
+                            next_position = (max_pos_row[0] if max_pos_row and max_pos_row[0] is not None else 0) + 1
+                            
+                            source_cursor.execute("SELECT * FROM vehicles WHERE type = 0 LIMIT 1")
+                            sample_vehicle = source_cursor.fetchone()
+                            if sample_vehicle:
+                                source_cursor.execute("PRAGMA table_info(vehicles)")
+                                vehicle_column_names = [col[1] for col in source_cursor.fetchall()]
+                                insert_columns, insert_values = [], []
+                                for col_name in vehicle_column_names:
+                                    val = None
+                                    if col_name == "id": continue
+                                    elif col_name == "type": val = getattr(self.current_loco, "rail_vehicle_type", 0) or 0
+                                    elif col_name == "name": val = self.current_loco.name or ""
+                                    elif col_name == "address": val = self.current_loco.address or 0
+                                    elif col_name == "max_speed": val = self.current_loco.speed or 0
+                                    elif col_name == "active": val = 1 if getattr(self.current_loco, "active", True) else 0
+                                    elif col_name == "traction_direction": val = 1 if self.current_loco.direction else 0
+                                    elif col_name == "position": val = next_position
+                                    elif col_name == "image_name": val = self.current_loco.image_name or None
+                                    else:
+                                        if col_name in sample_vehicle.keys(): val = sample_vehicle[col_name]
+                                    
+                                    if val is not None or col_name in sample_vehicle.keys():
+                                        insert_columns.append(col_name)
+                                        insert_values.append(val)
+                                
+                                placeholders = ", ".join(["?" for _ in insert_columns])
+                                new_cursor.execute(f"INSERT INTO vehicles ({', '.join(insert_columns)}) VALUES ({placeholders})", tuple(insert_values))
+                                vehicle_id = new_cursor.lastrowid
+                            else:
+                                messagebox.showerror("Error", "Cannot create new vehicle: no sample vehicle found.")
+                                return False
+
+                        if vehicle_id:
+                            source_cursor.execute("SELECT * FROM vehicles WHERE id = ?", (vehicle_id,))
+                            vehicle_row = source_cursor.fetchone()
+                            if vehicle_row:
+                                columns = ", ".join(vehicle_row.keys())
+                                placeholders = ", ".join(["?" for _ in vehicle_row])
+                                new_cursor.execute(f"INSERT INTO vehicles ({columns}) VALUES ({placeholders})", tuple(vehicle_row))
+
+                                if "functions" in tables:
+                                    source_cursor.execute("PRAGMA table_info(functions)")
+                                    func_column_names = [col[1] for col in source_cursor.fetchall()]
+                                    new_cursor.execute("SELECT MAX(id) FROM functions")
+                                    max_id_result = new_cursor.fetchone()
+                                    next_id = (max_id_result[0] + 1) if max_id_result[0] is not None else 1
+                                    new_cursor.execute("DELETE FROM functions WHERE vehicle_id = ?", (vehicle_id,))
+
+                                    source_cursor.execute("SELECT * FROM functions WHERE vehicle_id = ?", (vehicle_id,))
+                                    for func_row in source_cursor.fetchall():
+                                        f_cols = ", ".join(func_row.keys())
+                                        f_vals = tuple(func_row)
+                                        f_phs = ", ".join(["?" for _ in func_row])
+                                        new_cursor.execute(f"INSERT INTO functions ({f_cols}) VALUES ({f_phs})", f_vals)
+
+                                source_cursor.execute("SELECT vtc.* FROM vehicles_to_categories vtc WHERE vtc.vehicle_id = ?", (vehicle_id,))
+                                for cat_row in source_cursor.fetchall():
+                                    source_cursor.execute("SELECT * FROM categories WHERE id = ?", (cat_row["category_id"],))
+                                    cat_data = source_cursor.fetchone()
+                                    if cat_data:
+                                        new_cursor.execute("SELECT id FROM categories WHERE id = ?", (cat_data["id"],))
+                                        if not new_cursor.fetchone():
+                                            c_cols = ", ".join(cat_data.keys())
+                                            c_phs = ", ".join(["?" for _ in cat_data])
+                                            new_cursor.execute(f"INSERT INTO categories ({c_cols}) VALUES ({c_phs})", tuple(cat_data))
+                                    vtc_cols = ", ".join(cat_row.keys())
+                                    vtc_phs = ", ".join(["?" for _ in cat_row])
+                                    new_cursor.execute(f"INSERT INTO vehicles_to_categories ({vtc_cols}) VALUES ({vtc_phs})", tuple(cat_row))
+
+                        new_db.commit()
+                        new_db.close()
+                        source_db.close()
+
+                        with open(new_db_path, "rb") as f:
+                            sqlite_data = bytearray(f.read())
+                        sqlite_data[60:64] = (16).to_bytes(4, "big")
+                        with open(new_db_path, "wb") as f:
+                            f.write(sqlite_data)
+
+                        if self.current_loco.image_name:
+                            for filename in input_zip.namelist():
+                                if self.current_loco.image_name in filename or filename.endswith(f"lok_{self.current_loco.address}.png"):
+                                    image_data = input_zip.read(filename)
+                                    image_filename = filename.split("/")[-1] if filename.endswith(".png") else f"lok_{self.current_loco.address}.png"
+                                    (export_path / image_filename).write_bytes(image_data)
+                                    break
+
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as output_zip:
+                            output_zip.write(new_db_path, f"{export_dir}/Loco.sqlite")
+                            if self.current_loco.image_name:
+                                for img_file in export_path.glob("*.png"):
+                                    output_zip.write(img_file, f"{export_dir}/{img_file.name}")
+                        
+                        return True
+
+                    finally:
+                        Path(source_db_path).unlink()
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export locomotive: {e}")
+            return False
+
     def share_with_airdrop(self):
         """Share z21loco file via AirDrop using NSSharingService (macOS)."""
         if not self.current_loco or not self.z21_data or not self.parser:
@@ -1760,12 +2413,14 @@ Function Details:  {len(loco.function_details)} available
             temp_filename = f"{loco_name}_{uuid.uuid4().hex[:8]}.z21loco"
             output_path = Path(temp_dir) / temp_filename
 
-            # Reuse export logic (simplified for brevity) - ideally extract export logic to separate method returning path
-            # For this cleanup, assuming export works and file exists at output_path
-            # ... (Export logic here would duplicate export_z21_loco but to temp path) ...
-            
-            # Placeholder for actual export execution to output_path:
-            # self._internal_export(output_path) 
+            # Actually export the file first
+            if not self._export_loco_to_temp_file(output_path):
+                return  # Error message already shown by export method
+
+            # Verify file exists before trying to share
+            if not output_path.exists():
+                messagebox.showerror("Error", f"Exported file not found at: {output_path}")
+                return
 
             file_url = NSURL.fileURLWithPath_(str(output_path.absolute()))
             file_array = NSArray.arrayWithObject_(file_url)
@@ -1773,7 +2428,8 @@ Function Details:  {len(loco.function_details)} available
 
             try:
                 sharing_service = NSSharingService.sharingServiceNamed_("com.apple.share.AirDrop")
-            except Exception: pass
+            except Exception: 
+                pass
 
             if not sharing_service:
                 try:
@@ -1782,16 +2438,27 @@ Function Details:  {len(loco.function_details)} available
                         if "AirDrop" in service.title() or "airdrop" in service.title().lower():
                             sharing_service = service
                             break
-                except Exception: pass
+                except Exception: 
+                    pass
 
             if sharing_service:
                 if sharing_service.canPerformWithItems_(file_array):
                     sharing_service.performWithItems_(file_array)
+                    # Success: silently shared via AirDrop, no message box needed
                 else:
-                    subprocess.run(["open", "-R", str(output_path)], check=True)
+                    # Fallback: show in Finder
+                    try:
+                        subprocess.run(["open", "-R", str(output_path)], check=True)
+                        # Success: Finder opened, no message box needed
+                    except subprocess.CalledProcessError:
+                        messagebox.showwarning("Warning", f"File exported to:\n{output_path}\n\nCould not open Finder.")
             else:
-                subprocess.run(["open", "-R", str(output_path)], check=True)
-                messagebox.showwarning("AirDrop Not Available", "File exported but AirDrop service not found. File shown in Finder.")
+                # Fallback: show in Finder
+                try:
+                    subprocess.run(["open", "-R", str(output_path)], check=True)
+                    # Success: Finder opened (AirDrop not available but Finder works), no message box needed
+                except subprocess.CalledProcessError:
+                    messagebox.showwarning("Warning", f"File exported to:\n{output_path}\n\nAirDrop not available and could not open Finder.")
 
         except Exception as e:
             messagebox.showerror("Share Error", f"Failed to share locomotive: {e}")
@@ -2360,7 +3027,7 @@ Function Details:  {len(loco.function_details)} available
                 button_type = button_type_map.get(button_type_var.get(), 0)
                 time_str = str(float(time_var.get())) if button_type == 2 else "0"
 
-                max_position = max((f.position for f in self.current_loco.function_details.values()), default=0)
+                max_position = max((f.position for f in self.current_loco.function_details.values()), default=-1)
                 func_info = FunctionInfo(func_num, icon_name, shortcut_var.get().strip(), max_position + 1, time_str, button_type, True)
                 
                 self.current_loco.function_details[func_num] = func_info
@@ -2665,12 +3332,31 @@ def main():
 
     os.environ["PYTHONUNBUFFERED"] = "1"
     if sys.platform == "darwin":
-        class TSMFilter:
-            def __init__(self, original): self.original = original
+        # Suppress macOS system logging warnings
+        os.environ["OS_ACTIVITY_MODE"] = "disable"
+        
+        class macOSWarningFilter:
+            """Filter macOS-specific stderr warnings that don't affect functionality."""
+            def __init__(self, original):
+                self.original = original
+                import re
+                # Patterns to filter out macOS warnings
+                self.filter_patterns = [
+                    re.compile(r'.*TSM.*', re.IGNORECASE),
+                    re.compile(r'.*IMKCFRunLoopWakeUpReliable.*', re.IGNORECASE),
+                    re.compile(r'.*error messaging the mach port.*', re.IGNORECASE),
+                    re.compile(r'.*NSOpenPanel.*overrides the method.*', re.IGNORECASE),
+                    re.compile(r".*The class 'NSOpenPanel' overrides the method.*", re.IGNORECASE),
+                ]
             def write(self, text):
-                if "TSM AdjustCapsLockLED" not in text and "TSM" not in text: self.original.write(text)
-            def flush(self): self.original.flush()
-        sys.stderr = TSMFilter(sys.stderr)
+                # Filter out macOS-specific warnings
+                for pattern in self.filter_patterns:
+                    if pattern.search(text):
+                        return
+                self.original.write(text)
+            def flush(self):
+                self.original.flush()
+        sys.stderr = macOSWarningFilter(sys.stderr)
 
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")

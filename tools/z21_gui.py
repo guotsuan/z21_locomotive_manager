@@ -359,8 +359,10 @@ class Z21GUI(Z21GUIOperationsMixin):
         # Configure row weight for overview text area to expand
         details_frame.grid_rowconfigure(row, weight=1)
 
-        # Mousewheel binding logic
-        def on_overview_mousewheel(event):
+        # Mousewheel binding logic for overview text area
+        # This handler is bound directly to overview_text to prevent event bubbling
+        def on_overview_text_mousewheel(event):
+            """Handle mousewheel events on overview_text, preventing outer scroll."""
             try:
                 if self.notebook.get() != "Overview":
                     return
@@ -378,12 +380,35 @@ class Z21GUI(Z21GUIOperationsMixin):
 
             if scroll_amount != 0:
                 try:
-                    if self.overview_text.winfo_containing(event.x_root, event.y_root):
-                        self.overview_text.yview_scroll(int(scroll_amount), "units")
-                        return "break"
+                    self.overview_text.yview_scroll(int(scroll_amount), "units")
                 except:
                     pass
+            # Always return "break" to prevent event from bubbling to outer containers
             return "break"
+
+        # Bind mousewheel events directly to overview_text to prevent outer scroll
+        self.overview_text.bind("<MouseWheel>", on_overview_text_mousewheel)
+        self.overview_text.bind("<Button-4>", on_overview_text_mousewheel)
+        self.overview_text.bind("<Button-5>", on_overview_text_mousewheel)
+
+        # Mousewheel binding logic for outer containers (only when NOT over overview_text)
+        def on_overview_mousewheel(event):
+            """Handle mousewheel events on outer containers, but skip if over overview_text."""
+            try:
+                if self.notebook.get() != "Overview":
+                    return
+            except:
+                pass
+            # Skip if mouse is over overview_text (let it handle its own scrolling)
+            try:
+                if self.overview_text.winfo_containing(event.x_root, event.y_root):
+                    return  # Let overview_text handle it, don't scroll outer container
+            except:
+                pass
+            
+            # For outer containers, allow normal scrolling behavior
+            # (This will scroll the scrollable_frame if needed)
+            return
 
         scrollable_frame.bind("<MouseWheel>", on_overview_mousewheel, add="+")
         scrollable_frame.bind("<Button-4>", on_overview_mousewheel, add="+")
@@ -392,9 +417,8 @@ class Z21GUI(Z21GUIOperationsMixin):
         self.overview_frame.bind("<Button-4>", on_overview_mousewheel, add="+")
         self.overview_frame.bind("<Button-5>", on_overview_mousewheel, add="+")
         
-        self.root.bind_all("<MouseWheel>", lambda e: on_overview_mousewheel(e) if self.notebook.get() == "Overview" else None, add="+")
-        self.root.bind_all("<Button-4>", lambda e: on_overview_mousewheel(e) if self.notebook.get() == "Overview" else None, add="+")
-        self.root.bind_all("<Button-5>", lambda e: on_overview_mousewheel(e) if self.notebook.get() == "Overview" else None, add="+")
+        # Remove global bindings for Overview tab to prevent conflicts
+        # (The frame-level bindings above should be sufficient)
 
     def setup_functions_tab(self):
         """Set up the functions tab."""
@@ -741,8 +765,7 @@ Function Details:  {len(loco.function_details)} available
             text += f"\n{'='*70}\nCV VALUES\n{'='*70}\n"
             for cv_num, cv_value in sorted(loco.cvs.items()):
                 text += f"CV{cv_num:3d} = {cv_value}\n"
-        else:
-            text += "\nNo CV values configured.\n"
+
         self.overview_text.insert(1.0, text)
         self.overview_text.configure(state="disabled")
 

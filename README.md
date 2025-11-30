@@ -21,7 +21,7 @@ This Python application allows you to read, parse, and manage `.z21` files used 
 
 1. **Clone the repository** (or navigate to the project directory)
 2. **Install dependencies**:
-   ```bash
+```bash
 pip install -r requirements.txt
 ```
 3. Launch the graphical interface to browse locomotives:

@@ -15,7 +15,11 @@ This Python application allows you to read, parse, and manage `.z21` files used 
 ## 📋 Requirements
 
 - Python 3.8 or higher
-- 
+- customtkinter>=5.0.0
+- Pillow>=9.0.0  
+- pytesseract>=0.3.10
+- pdf2image>=1.16.3
+- pyobjc-framework-AppKit>=9.0.0 
 
 ## 🚀 Usage
 

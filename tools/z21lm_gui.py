@@ -50,7 +50,7 @@ sys.path.insert(0, str(project_root))
 
 from src.parser import Z21Parser
 from src.data_models import Z21File, Locomotive, FunctionInfo
-from tools.z21_gui_operations import Z21GUIOperationsMixin
+from tools.z21lm_gui_operations import Z21GUIOperationsMixin
 
 
 class Z21GUI(Z21GUIOperationsMixin):

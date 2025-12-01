@@ -20,11 +20,11 @@ A graphical user interface for browsing and viewing locomotive details from Z21 
 
 ```bash
 # Run with default file (z21_new.z21)
-python tools/z21_gui.py
+python tools/z21lm_gui.py
 
 # Run with specific file
-python tools/z21_gui.py z21_new.z21
-python tools/z21_gui.py rocoData.z21
+python tools/z21lm_gui.py z21_new.z21
+python tools/z21lm_gui.py rocoData.z21
 ```
 
 ### GUI Layout
@@ -60,7 +60,7 @@ python tools/z21_gui.py rocoData.z21
 
 ```bash
 # Start the GUI
-python tools/z21_gui.py z21_new.z21
+python tools/z21lm_gui.py z21_new.z21
 
 # The window will show:
 # - Left: List of 65 locomotives

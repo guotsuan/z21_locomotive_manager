@@ -5,6 +5,9 @@ For Roco products, it is easy to add your model train to your train library in t
  
 This Python application allows you to read, parse, and manage `.z21` files used by Roco's Z21 App more conveniently on your computer. With this tool, you can add locomotive data, browse function mappings, and easily export your locomotives back to the Z21 App via AirDrop if you are using a macOS computer.
 
+## Future Plans
+Use your cell phone camera to take a photo of your instruction sheet with the functions table, then upload it to the application. The app will intelligently extract all the relevant information automatically.
+
 
 ## ✨ Features
 
@@ -15,7 +18,11 @@ This Python application allows you to read, parse, and manage `.z21` files used 
 ## 📋 Requirements
 
 - Python 3.8 or higher
-- 
+- customtkinter>=5.0.0
+- Pillow>=9.0.0  
+- pytesseract>=0.3.10
+- pdf2image>=1.16.3
+- pyobjc-framework-AppKit>=9.0.0 
 
 ## 🚀 Usage
 
@@ -28,11 +35,11 @@ pip install -r requirements.txt
 
 ```bash
 # Run with default file (z21_new.z21)
-python tools/z21_gui.py
+python tools/z21lm_gui.py
 
 # Run with specific file
-python tools/z21_gui.py z21_new.z21
-python tools/z21_gui.py rocoData.z21
+python tools/z21lm_gui.py z21_new.z21
+python tools/z21lm_gui.py rocoData.z21
 ```
 
 **GUI Features**:
@@ -46,32 +53,23 @@ python tools/z21_gui.py rocoData.z21
 
 ```
 z21_locomitive_manager/
-├── README.md              # This file
-├── PLAN.md                # Detailed development plan
-├── QUICKSTART.md          # Quick start guide
-├── requirements.txt       # Python dependencies
-├── pytest.ini            # Pytest configuration
-├── icon_mapping.json      # Icon name mappings
-├── src/                   # Core source code
+├── README.md                    # This file
+├── requirements.txt             # Python dependencies
+├── icon_mapping.json            # Icon name mappings for function icons
+├── src/                         # Core source code
 │   ├── __init__.py
-│   ├── binary_reader.py   # Binary file reading utilities
-│   ├── cli.py             # Command-line interface
-│   ├── data_models.py     # Data structure definitions
-│   └── parser.py          # File format parser (XML/SQLite)
-├── tools/                 # Utility scripts
-│   ├── z21_gui.py         # GUI browser application
-│   ├── hex_dump.py        # Hex dump utility
-│   ├── examine_sqlite.py  # SQLite database examination
-│   ├── list_locomotives.py # List locomotives tool
-│   ├── extract_icons.py   # Icon extraction tool
-│   ├── list_icons.py      # List icons tool
-│   ├── match_icons.py     # Icon matching tool
-│   └── GUI_README.md      # GUI documentation
-├── icons/                 # Locomotive function icons
-├── extracted_icons/       # Extracted icon data
-├── tests/                 # Unit tests
-│   └── test_reader.py
-└── *.z21                  # Sample Z21 files
+│   ├── binary_reader.py         # Binary file reading utilities
+│   ├── cli.py                   # Command-line interface
+│   ├── data_models.py           # Data structure definitions
+│   └── parser.py                # File format parser (XML/SQLite)
+├── tools/                       # Utility scripts and GUI
+│   ├── __init__.py
+│   ├── z21lm_gui.py             # Main GUI browser application (customtkinter)
+│   └── z21lm_gui_operations.py  # GUI operations mixin (import, export, etc.)
+├── icons/                       # Locomotive function icons (PNG files)
+│   └── *.png                    # Function icon images
+├── *.z21                        # Z21 database files (ZIP archives)
+└── *.z21loco                    # Individual locomotive files
 ```
 
 ### Format: SQLite (New Format)

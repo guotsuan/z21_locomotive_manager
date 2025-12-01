@@ -5,6 +5,9 @@ For Roco products, it is easy to add your model train to your train library in t
  
 This Python application allows you to read, parse, and manage `.z21` files used by Roco's Z21 App more conveniently on your computer. With this tool, you can add locomotive data, browse function mappings, and easily export your locomotives back to the Z21 App via AirDrop if you are using a macOS computer.
 
+## Future Plans
+Use your cell phone camera to take a photo of your instruction sheet with the functions table, then upload it to the application. The app will intelligently extract all the relevant information automatically.
+
 
 ## ✨ Features
 

@@ -1,7 +1,7 @@
 # Z21 Locomotive Manager
 
 ## Purpose 
-For Roco products, it is easy to add your model train to your train library in the Z21 App by simply loading the details and function configuration from the online database. However, for model trains from other manufacturers, the process is less efficient. You must manually enter all details and function mappings one by one in the Z21 App.
+For Roco products, it is easy to add your model train to your trains/locomotives library in the Z21 App by simply loading the details and function configuration from the online database. However, for model trains/locomotives from other manufacturers, the process is less efficient. You must manually enter all details and function mappings one by one in the Z21 App.
  
 This Python application allows you to read, parse, and manage `.z21` files used by Roco's Z21 App more conveniently on your computer. With this tool, you can add locomotive data, browse function mappings, and easily export your locomotives back to the Z21 App via AirDrop if you are using a macOS computer.
 

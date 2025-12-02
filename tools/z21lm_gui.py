@@ -121,18 +121,18 @@ class Z21GUI(Z21GUIOperationsMixin):
         self.root.update_idletasks()  # Ensure window is ready
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        # Set window width to 2/3 of original (80% * 2/3 ≈ 53.3% of screen width)
-        # Original: min 1000, max 1600, default 80% of screen
-        # New: min 667, max 1067, default ~53% of screen
-        window_width = max(667, min(1067, int(screen_width * 0.53)))
+        # Set window width to 1020 (requested by user: left 340 + right 680 = 1020)
+        # Note: Actual window width will be 1035 to accommodate sash (5) and padding (10)
+        # But we use 1020 as the base and let the system handle the layout
+        window_width = 1020
         # Set window height to 75% of screen height (min 600, max 1000)
         window_height = max(600, min(1000, int(screen_height * 0.75)))
         # Center the window on screen
         x = (screen_width - window_width) // 2
         y = (screen_height - window_height) // 2
         self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
-        # Set minimum window size (reduced to 2/3 of original)
-        self.root.minsize(533, 500)
+        # Set minimum window size
+        self.root.minsize(1020, 500)
 
         # Track window resize for function layout recalculation
         self._resize_timeout_id = None
@@ -225,8 +225,8 @@ class Z21GUI(Z21GUIOperationsMixin):
 
         # Right panel: Details
         right_frame = ctk.CTkFrame(main_paned)
-        # Set right panel width to 2/3 of original (500 * 2/3 ≈ 333)
-        main_paned.add(right_frame, minsize=300, width=333)
+        # Set right panel width to 680
+        main_paned.add(right_frame, minsize=300, width=680)
 
         # Details notebook (tabs)
         self.notebook = ctk.CTkTabview(right_frame)

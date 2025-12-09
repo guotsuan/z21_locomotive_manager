@@ -78,12 +78,20 @@ class Z21GUI(Z21GUIOperationsMixin):
         self.status_timeout_id = None
         self.default_status_text = "Loading..."
         self._mouse_over_function_icon = False
+        self._mouse_leave_timeout_id = None  # Track mouse leave timeout to cancel if needed
+        self._cursor_change_timeout_id = None  # Track cursor change timeout to prevent flicker
         self.selected_function_num = None  # Track selected function icon
         self.delete_function_button = None  # Reference to delete button
         self.function_card_frames = {
         }  # Store card frames for selection highlighting
+        self.edit_function_dialog = None  # Track edit function dialog window
         self.setup_ui()
         self.load_data()
+
+    def _set_mouse_over_function_icon(self, value: bool):
+        """Set mouse over function icon flag and clear timeout ID."""
+        self._mouse_over_function_icon = value
+        self._mouse_leave_timeout_id = None
 
     def set_status_message(self, message: str, timeout: int = 5000):
         """Set status bar message and clear it after timeout (default 5 seconds)."""
@@ -1206,14 +1214,45 @@ Function Details:  {len(loco.function_details)} available
                     self.edit_function(fn, fi)
 
                 def on_enter(e):
+                    # Cancel any pending mouse leave timeout
+                    if self._mouse_leave_timeout_id is not None:
+                        self.root.after_cancel(self._mouse_leave_timeout_id)
+                        self._mouse_leave_timeout_id = None
+                    # Cancel any pending cursor change to default
+                    if self._cursor_change_timeout_id is not None:
+                        self.root.after_cancel(self._cursor_change_timeout_id)
+                        self._cursor_change_timeout_id = None
                     setattr(self, '_mouse_over_function_icon', True)
-                    widget.configure(cursor="hand2")
+                    # Use debounced cursor change to prevent flicker when moving quickly
+                    # Only change cursor after a short delay, avoiding rapid changes
+                    def change_cursor():
+                        try:
+                            widget.configure(cursor="hand2")
+                        except:
+                            pass
+                        self._cursor_change_timeout_id = None
+                    # Delay cursor change to avoid flicker during rapid mouse movement
+                    # Use after_idle to update when GUI is idle, reducing render impact
+                    self._cursor_change_timeout_id = self.root.after_idle(change_cursor)
 
                 def on_leave(e):
-                    self.root.after(
-                        100, lambda: setattr(self, '_mouse_over_function_icon',
-                                             False))
-                    widget.configure(cursor="")
+                    # Cancel any pending cursor change to hand
+                    if self._cursor_change_timeout_id is not None:
+                        self.root.after_cancel(self._cursor_change_timeout_id)
+                        self._cursor_change_timeout_id = None
+                    # Cancel any pending mouse leave timeout
+                    if self._mouse_leave_timeout_id is not None:
+                        self.root.after_cancel(self._mouse_leave_timeout_id)
+                    # Reset cursor with a small delay to match enter behavior
+                    def reset_cursor():
+                        try:
+                            widget.configure(cursor="")
+                        except:
+                            pass
+                    self.root.after_idle(reset_cursor)
+                    # Schedule mouse leave flag update with delay
+                    self._mouse_leave_timeout_id = self.root.after(
+                        100, lambda: self._set_mouse_over_function_icon(False))
 
                 widget.bind("<Button-1>", on_single_click)
                 widget.bind("<Double-Button-1>", on_double_click)
@@ -1225,10 +1264,6 @@ Function Details:  {len(loco.function_details)} available
                     child._click_pending = False
                     child.bind("<Button-1>", on_single_click)
                     child.bind("<Double-Button-1>", on_double_click)
-                    child.bind("<Enter>",
-                               lambda e, w=widget: w.configure(cursor="hand2"))
-                    child.bind("<Leave>",
-                               lambda e, w=widget: w.configure(cursor=""))
 
             make_clickable(card_frame, func_num, func_info, card_frame)
             card_frame.grid(row=row, column=col, padx=5, pady=5, sticky="nw")
@@ -1601,7 +1636,8 @@ Function Details:  {len(loco.function_details)} available
                      text_color=btn_color,
                      height=12).pack(side="left")
 
-        if func_info.time and func_info.time != "0":
+        # Only show time for time button (button_type == 2), not for push-button (button_type == 1)
+        if func_info.button_type == 2 and func_info.time and func_info.time != "0":
             ctk.CTkLabel(type_time_frame,
                          text=f" ⏱ {func_info.time}s",
                          font=("Arial", 8),

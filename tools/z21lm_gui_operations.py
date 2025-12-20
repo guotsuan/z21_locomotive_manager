@@ -34,6 +34,9 @@ from tkinter import messagebox, filedialog, scrolledtext
 # Try to import PIL for image processing
 try:
     from PIL import Image, ImageTk
+    # Verify Image.open exists and check its signature
+    if not hasattr(Image, 'open'):
+        raise ImportError("PIL.Image.open not found")
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -154,7 +157,77 @@ class Z21GUIOperationsMixin:
             return
 
         try:
-            original_image = Image.open(image_path)
+            # Ensure image_path is a string (not a tuple, list, or other type)
+            if isinstance(image_path, (list, tuple)):
+                # If it's a list/tuple, take the first element
+                image_path = image_path[0] if len(image_path) > 0 else str(image_path)
+            elif not isinstance(image_path, (str, Path)):
+                image_path = str(image_path)
+            
+            # Normalize the file path (especially important for macOS Downloads folder)
+            image_path_obj = Path(image_path)
+            if not image_path_obj.exists():
+                messagebox.showerror("Error", f"Image file not found: {image_path}")
+                return
+            
+            # Resolve any symlinks or relative paths
+            image_path_resolved = image_path_obj.resolve()
+            
+            # Ensure we pass a string to Image.open() - it doesn't accept Path objects directly in some versions
+            image_path_str = str(image_path_resolved)
+            
+            # Open image - PIL/Pillow handles JPEG, PNG, and other formats automatically
+            # Image.open() only accepts: file path (str), file-like object, or file descriptor
+            # Double-check that we're passing a string, not a list or dict
+            if isinstance(image_path_str, (list, dict, tuple)):
+                raise ValueError(f"Invalid image path type: {type(image_path_str)}. Expected string, got {image_path_str}")
+            
+            # Use the simplest possible approach: open directly from file path
+            # Convert Path to string to ensure compatibility
+            file_path_string = str(image_path_resolved)
+            
+            # Verify the file exists and is readable
+            if not image_path_resolved.exists():
+                raise FileNotFoundError(f"Image file not found: {file_path_string}")
+            if not image_path_resolved.is_file():
+                raise ValueError(f"Path is not a file: {file_path_string}")
+            
+            # Use the most basic file opening method
+            # Read file as bytes first, then use BytesIO to avoid any path issues
+            from io import BytesIO
+            import traceback
+            
+            # Read file content
+            with open(file_path_string, 'rb') as f:
+                file_content = f.read()
+            
+            # Create BytesIO from content
+            img_buffer = BytesIO(file_content)
+            img_buffer.seek(0)
+            
+            # Open from BytesIO - pass ONLY the buffer object
+            # Absolutely no other arguments of any kind
+            # This is line 209 - where Image.open() is called
+            try:
+                original_image = Image.open(img_buffer)
+            except ValueError as ve:
+                # Capture the exact error with line information
+                import sys
+                import traceback
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                tb_lines = traceback.format_tb(exc_traceback)
+                error_info = f"Error at line 209 (Image.open call):\n"
+                error_info += f"Error type: {exc_type.__name__}\n"
+                error_info += f"Error message: {exc_value}\n"
+                error_info += f"Traceback:\n{''.join(tb_lines)}"
+                raise ValueError(error_info) from ve
+            
+            # Load image data
+            original_image.load()
+            
+            # Convert to RGB if necessary (some JPEG files might be in CMYK or other modes)
+            if original_image.mode not in ('RGB', 'RGBA', 'L'):
+                original_image = original_image.convert('RGB')
             img_width, img_height = original_image.size
             crop_window = ctk.CTkToplevel(self.root)
             crop_window.title("Crop Locomotive Image")
@@ -165,8 +238,8 @@ class Z21GUIOperationsMixin:
             display_height = min(600, img_height)
             crop_window.geometry(f"{display_width + 100}x{display_height + 150}")
 
-            canvas_frame = ctk.CTkFrame(crop_window, padding=10)
-            canvas_frame.pack(fill="both", expand=True)
+            canvas_frame = ctk.CTkFrame(crop_window)
+            canvas_frame.pack(fill="both", expand=True, padx=10, pady=10)
             from tkinter import Canvas
             canvas = Canvas(canvas_frame, bg="gray90", highlightthickness=1)
             canvas.pack(fill="both", expand=True)
@@ -257,8 +330,8 @@ class Z21GUIOperationsMixin:
             canvas.bind("<B1-Motion>", on_canvas_drag)
             canvas.bind("<ButtonRelease-1>", on_canvas_release)
 
-            button_frame = ctk.CTkFrame(crop_window, padding=10)
-            button_frame.pack(fill="x")
+            button_frame = ctk.CTkFrame(crop_window)
+            button_frame.pack(fill="x", padx=10, pady=10)
 
             def recognize_text_from_image():
                 try:
@@ -285,15 +358,15 @@ class Z21GUIOperationsMixin:
                             text_window.geometry("600x400")
                             text_window.transient(crop_window)
                             
-                            text_frame = ctk.CTkFrame(text_window, padding=10)
-                            text_frame.pack(fill="both", expand=True)
+                            text_frame = ctk.CTkFrame(text_window)
+                            text_frame.pack(fill="both", expand=True, padx=10, pady=10)
                             text_widget = scrolledtext.ScrolledText(text_frame, wrap="word", width=70, height=20)
                             text_widget.pack(fill="both", expand=True)
                             text_widget.insert(1.0, extracted_text)
                             text_widget.configure(state="disabled")
 
-                            button_frame_text = ctk.CTkFrame(text_window, padding=10)
-                            button_frame_text.pack(fill="x")
+                            button_frame_text = ctk.CTkFrame(text_window)
+                            button_frame_text.pack(fill="x", padx=10, pady=10)
 
                             def copy_text():
                                 text_window.clipboard_clear()
@@ -357,20 +430,69 @@ class Z21GUIOperationsMixin:
             ctk.CTkLabel(button_frame, text="Drag corners/edges to resize, drag inside to move the crop area", font=("Arial", 9)).pack(side="left", padx=5)
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to open image: {e}")
+            import traceback
+            error_msg = str(e)
+            error_type = type(e).__name__
+            
+            # Get full traceback to show exact line number
+            tb_str = ''.join(traceback.format_tb(e.__traceback__))
+            
+            # Find the line number in our code where error occurred
+            error_line = "Unknown"
+            for line in tb_str.split('\n'):
+                if 'z21lm_gui_operations.py' in line and 'in open_image_crop_window' in line:
+                    # Extract line number from traceback
+                    import re
+                    match = re.search(r'line (\d+)', line)
+                    if match:
+                        error_line = match.group(1)
+                        break
+            
+            # Provide more helpful error messages
+            if "padding" in error_msg.lower():
+                # This specific error suggests a PIL version or argument issue
+                error_msg = (
+                    f"PIL/Pillow error at line {error_line} when opening image.\n"
+                    f"This may be a version compatibility issue.\n"
+                    f"Please try:\n"
+                    f"1. Update Pillow: pip install --upgrade Pillow\n"
+                    f"2. Or reinstall Pillow: pip uninstall Pillow && pip install Pillow\n\n"
+                    f"Error type: {error_type}\n"
+                    f"Error message: {error_msg}\n\n"
+                    f"Traceback:\n{tb_str}"
+                )
+            elif "cannot identify" in error_msg.lower() or "not supported" in error_msg.lower():
+                error_msg = (
+                    f"Unsupported image format at line {error_line}.\n"
+                    f"Please use JPEG (.jpg, .jpeg) or PNG (.png) files.\n\n"
+                    f"Error type: {error_type}\n"
+                    f"Error message: {error_msg}\n\n"
+                    f"Traceback:\n{tb_str}"
+                )
+            else:
+                error_msg = (
+                    f"Error at line {error_line}\n"
+                    f"Error type: {error_type}\n"
+                    f"Error message: {error_msg}\n\n"
+                    f"Traceback:\n{tb_str}"
+                )
+            
+            # Use the original path for error message
+            display_path = image_path if isinstance(image_path, str) else str(image_path)
+            messagebox.showerror("Error Opening Image", 
+                               f"Failed to open image file:\n{display_path}\n\n{error_msg}\n\n"
+                               f"Please ensure the file is a valid image format (JPEG, PNG, etc.) and is not corrupted.")
 
 
     def scan_for_details(self):
-        """Scan image, PDF, or JSON file for locomotive details and auto-fill fields."""
+        """Import locomotive details from a JSON file and auto-fill fields."""
         if not self.current_loco:
             messagebox.showerror("Error", "Please select a locomotive first.")
             return
 
         file_path = filedialog.askopenfilename(
-            title="Select Image, PDF, or JSON File",
+            title="Select JSON File",
             filetypes=[
-                ("Image files", "*.png *.jpg *.jpeg *.gif *.bmp *.tiff"),
-                ("PDF files", "*.pdf"),
                 ("JSON files", "*.json"),
                 ("All files", "*.*")
             ],
@@ -381,28 +503,13 @@ class Z21GUIOperationsMixin:
         file_path_obj = Path(file_path)
         
         try:
-            # Check if it's a JSON file
-            if file_path_obj.suffix.lower() == ".json":
-                self.status_label.configure(text="Reading JSON file...")
-                self.root.update()
-                self.load_from_json_file(file_path_obj)
-                self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
-            else:
-                # Use OCR for image/PDF files
-                self.status_label.configure(text="Scanning document...")
-                self.root.update()
-                extracted_text = self.extract_text_from_file(file_path)
-                if not extracted_text:
-                    messagebox.showwarning("Warning", "No text could be extracted from the document.")
-                    self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
-                    return
-
-                # Show OCR result in a dialog before filling fields
-                self.show_ocr_result_dialog(extracted_text, file_path)
-                self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
+            self.status_label.configure(text="Reading JSON file...")
+            self.root.update()
+            self.load_from_json_file(file_path_obj)
+            self.set_status_message("Details imported from JSON file successfully!")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to scan document: {e}")
-            self.status_label.configure(text=f"Loaded {len(self.z21_data.locomotives)} locomotives")
+            messagebox.showerror("Error", f"Failed to import JSON file: {e}")
+            self.set_status_message("Error importing JSON file")
 
 
     def load_from_json_file(self, file_path: Path):
@@ -749,7 +856,13 @@ class Z21GUIOperationsMixin:
 
     def extract_text_from_file(self, file_path: str) -> str:
         """Extract text from image or PDF using OCR (pytesseract)."""
-        file_path = Path(file_path)
+        # Ensure file_path is a string (not a tuple, list, or other type)
+        if isinstance(file_path, (list, tuple)):
+            file_path = file_path[0] if len(file_path) > 0 else str(file_path)
+        elif not isinstance(file_path, (str, Path)):
+            file_path = str(file_path)
+        
+        file_path_obj = Path(file_path)
         
         try:
             import pytesseract
@@ -758,13 +871,13 @@ class Z21GUIOperationsMixin:
             return ""
 
         try:
-            if file_path.suffix.lower() == ".pdf":
+            if file_path_obj.suffix.lower() == ".pdf":
                 try:
                     from pdf2image import convert_from_path
                 except ImportError:
                     messagebox.showerror("Missing Dependency", "pdf2image is required for PDF processing.")
                     return ""
-                images = convert_from_path(str(file_path))
+                images = convert_from_path(str(file_path_obj))
                 text_parts = []
                 for image in images:
                     text = pytesseract.image_to_string(image)
@@ -774,7 +887,8 @@ class Z21GUIOperationsMixin:
                 if not HAS_PIL:
                     messagebox.showerror("Error", "PIL/Pillow is required for image processing.")
                     return ""
-                image = Image.open(file_path)
+                # Ensure we pass a string to Image.open()
+                image = Image.open(str(file_path_obj))
                 return pytesseract.image_to_string(image) or ""
         except Exception as e:
             raise Exception(f"OCR failed: {e}")
@@ -1894,18 +2008,37 @@ class Z21GUIOperationsMixin:
         icon_preview_label.pack(pady=5)
 
         def update_icon_preview(*args):
-            icon_name = icon_var.get()
-            if icon_name:
-                preview_image = self.load_icon_image(icon_name, (80, 80))
-                if preview_image:
-                    icon_preview_label.configure(image=preview_image, text="")
-                    icon_preview_label.image = preview_image
-                else:
-                    icon_preview_label.configure(image=None, text="No icon found")
+            try:
+                icon_name = icon_var.get()
+                # Clear old image reference first to prevent "image doesn't exist" errors
+                if hasattr(icon_preview_label, 'image') and icon_preview_label.image:
+                    try:
+                        # Clear the internal label's image reference safely
+                        icon_preview_label._label.configure(image="")
+                    except:
+                        pass
                     icon_preview_label.image = None
-            else:
-                icon_preview_label.configure(image=None, text="Icon Preview")
-                icon_preview_label.image = None
+                
+                if icon_name:
+                    preview_image = self.load_icon_image(icon_name, (80, 80))
+                    if preview_image:
+                        # Store image reference to prevent garbage collection
+                        icon_preview_label.image = preview_image
+                        # Update label with new image
+                        icon_preview_label.configure(image=preview_image, text="")
+                    else:
+                        icon_preview_label.configure(image=None, text="No icon found")
+                        icon_preview_label.image = None
+                else:
+                    icon_preview_label.configure(image=None, text="Icon Preview")
+                    icon_preview_label.image = None
+            except Exception as e:
+                # Handle any errors gracefully to prevent crashes
+                try:
+                    icon_preview_label.configure(image=None, text="Preview error")
+                    icon_preview_label.image = None
+                except:
+                    pass
         icon_var.trace("w", update_icon_preview)
 
         form_frame = ctk.CTkFrame(main_frame)
@@ -1919,7 +2052,10 @@ class Z21GUIOperationsMixin:
         # Icon Selection
         ctk.CTkLabel(form_frame, text="Icon:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
         available_icons = self.get_available_icons()
-        icon_combo = ctk.CTkComboBox(form_frame, variable=icon_var, values=available_icons, width=200)
+        if not available_icons:
+            available_icons = [""]  # Ensure at least one empty option
+        icon_combo = ctk.CTkComboBox(form_frame, variable=icon_var, values=available_icons, 
+                                     state="readonly", width=200)
         icon_combo.grid(row=1, column=1, padx=10, pady=5, sticky="w")
 
         # Shortcut with Guess button
@@ -2077,7 +2213,16 @@ class Z21GUIOperationsMixin:
             messagebox.showwarning("No Locomotive", "Please select a locomotive first.")
             return
 
+        # Close existing edit dialog if open
+        if self.edit_function_dialog is not None:
+            try:
+                self.edit_function_dialog.destroy()
+            except:
+                pass
+            self.edit_function_dialog = None
+
         dialog = ctk.CTkToplevel(self.root)
+        self.edit_function_dialog = dialog  # Track the dialog window
         dialog.title(f"Edit Function F{func_num}")
         dialog.transient(self.root)
         dialog.grab_set()
@@ -2101,18 +2246,37 @@ class Z21GUIOperationsMixin:
         icon_preview_label.pack(pady=5)
 
         def update_icon_preview(*args):
-            icon_name = icon_var.get()
-            if icon_name:
-                preview_image = self.load_icon_image(icon_name, (80, 80))
-                if preview_image:
-                    icon_preview_label.configure(image=preview_image, text="")
-                    icon_preview_label.image = preview_image
-                else:
-                    icon_preview_label.configure(image=None, text="No icon found")
+            try:
+                icon_name = icon_var.get()
+                # Clear old image reference first to prevent "image doesn't exist" errors
+                if hasattr(icon_preview_label, 'image') and icon_preview_label.image:
+                    try:
+                        # Clear the internal label's image reference safely
+                        icon_preview_label._label.configure(image="")
+                    except:
+                        pass
                     icon_preview_label.image = None
-            else:
-                icon_preview_label.configure(image=None, text="Icon Preview")
-                icon_preview_label.image = None
+                
+                if icon_name:
+                    preview_image = self.load_icon_image(icon_name, (80, 80))
+                    if preview_image:
+                        # Store image reference to prevent garbage collection
+                        icon_preview_label.image = preview_image
+                        # Update label with new image
+                        icon_preview_label.configure(image=preview_image, text="")
+                    else:
+                        icon_preview_label.configure(image=None, text="No icon found")
+                        icon_preview_label.image = None
+                else:
+                    icon_preview_label.configure(image=None, text="Icon Preview")
+                    icon_preview_label.image = None
+            except Exception as e:
+                # Handle any errors gracefully to prevent crashes
+                try:
+                    icon_preview_label.configure(image=None, text="Preview error")
+                    icon_preview_label.image = None
+                except:
+                    pass
         icon_var.trace("w", update_icon_preview)
         update_icon_preview()  # Initial preview
 
@@ -2127,7 +2291,10 @@ class Z21GUIOperationsMixin:
         # Icon Selection
         ctk.CTkLabel(form_frame, text="Icon:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
         available_icons = self.get_available_icons()
-        icon_combo = ctk.CTkComboBox(form_frame, variable=icon_var, values=available_icons, width=200)
+        if not available_icons:
+            available_icons = [""]  # Ensure at least one empty option
+        icon_combo = ctk.CTkComboBox(form_frame, variable=icon_var, values=available_icons, 
+                                     state="readonly", width=200)
         icon_combo.grid(row=1, column=1, padx=10, pady=5, sticky="w")
 
         # Shortcut
@@ -2199,14 +2366,23 @@ class Z21GUIOperationsMixin:
                 self.update_functions()
                 self.update_overview()
                 dialog.destroy()
+                self.edit_function_dialog = None  # Clear reference when dialog is closed
                 self.set_status_message(f"Function F{new_func_num} updated successfully!")
             except ValueError as e:
                 messagebox.showerror("Error", f"Invalid input: {e}")
 
+        def on_dialog_close():
+            """Handle dialog close event."""
+            dialog.destroy()
+            self.edit_function_dialog = None  # Clear reference when dialog is closed
+
         button_frame = ctk.CTkFrame(main_frame)
         button_frame.pack(fill="x", pady=(15, 0))
         ctk.CTkButton(button_frame, text="Save", command=save_function).pack(side="right", padx=5)
-        ctk.CTkButton(button_frame, text="Cancel", command=dialog.destroy).pack(side="right", padx=5)
+        ctk.CTkButton(button_frame, text="Cancel", command=on_dialog_close).pack(side="right", padx=5)
+        
+        # Handle window close event (X button)
+        dialog.protocol("WM_DELETE_WINDOW", on_dialog_close)
         
         # Set minimum size and let window auto-resize based on content
         dialog.minsize(400, 300)

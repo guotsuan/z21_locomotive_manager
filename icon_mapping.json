@@ -284,6 +284,14 @@
     "alternator": {
       "path": "icons/dynamo_Normal.png",
       "filename": "dynamo_Normal.png"
+    },
+    "sifa": {
+      "path": "icons/sifa_Normal.png",
+      "filename": "sifa_Normal.png"
+    },
+    "stair_light": {
+      "path": "icons/stair_light_Normal.png",
+      "filename": "stair_light_Normal.png"
     }
   }
 }

@@ -140,7 +140,9 @@ class Z21GUI(Z21GUIOperationsMixin):
         y = (screen_height - window_height) // 2
         self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
         # Set minimum window size
-        self.root.minsize(1020, 500)
+        # Allow window to shrink smaller: left panel (200) + right panel (200) + sash + padding ≈ 420
+        # Set to 600 to allow more flexibility while ensuring usability
+        self.root.minsize(600, 500)
 
         # Track window resize for function layout recalculation
         self._resize_timeout_id = None
@@ -155,6 +157,30 @@ class Z21GUI(Z21GUIOperationsMixin):
                                  sashwidth=5,
                                  sashrelief="raised")
         main_paned.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Store reference to main_paned for resize handling
+        self.main_paned = main_paned
+        
+        # Bind to sash movement to update Functions tab layout when panel sizes change
+        def on_sash_moved(event):
+            # Only update if we're on Functions tab
+            if not (hasattr(self, 'notebook') and self.notebook.get() == "Functions" and self.current_loco):
+                return
+            # Debounce: cancel any pending update
+            if hasattr(self, "_sash_update_timeout_id") and self._sash_update_timeout_id:
+                self.root.after_cancel(self._sash_update_timeout_id)
+            # Schedule update after a delay to avoid flickering
+            def update_after_sash():
+                if hasattr(self, "_cached_canvas_width"):
+                    delattr(self, "_cached_canvas_width")
+                if hasattr(self, "_cached_cols"):
+                    delattr(self, "_cached_cols")
+                if hasattr(self, 'notebook') and self.notebook.get() == "Functions" and self.current_loco:
+                    self.update_functions(is_resize=True)
+                self._sash_update_timeout_id = None
+            self._sash_update_timeout_id = self.root.after(100, update_after_sash)
+        
+        main_paned.bind("<ButtonRelease-1>", on_sash_moved)
 
         # Left panel: Locomotive list
         left_frame = ctk.CTkFrame(main_paned)
@@ -233,8 +259,8 @@ class Z21GUI(Z21GUIOperationsMixin):
 
         # Right panel: Details
         right_frame = ctk.CTkFrame(main_paned)
-        # Set right panel width to 680
-        main_paned.add(right_frame, minsize=300, width=680)
+        # Set right panel width to 680, allow it to shrink smaller
+        main_paned.add(right_frame, minsize=200, width=680)
 
         # Details notebook (tabs)
         self.notebook = ctk.CTkTabview(right_frame)
@@ -245,6 +271,9 @@ class Z21GUI(Z21GUIOperationsMixin):
 
         self.functions_frame = self.notebook.add("Functions")
         self.setup_functions_tab()
+        
+        # Track if Functions tab has been shown for the first time
+        self._functions_tab_shown = False
 
     def setup_overview_tab(self):
         """Set up the overview tab."""
@@ -580,7 +609,7 @@ class Z21GUI(Z21GUIOperationsMixin):
                                sticky="ew")
 
         self.scan_button = ctk.CTkButton(button_container,
-                                         text="Scan for Details",
+                                         text="Import from JSON",
                                          command=self.scan_for_details)
         self.scan_button.grid(row=0,
                               column=2,
@@ -902,18 +931,26 @@ class Z21GUI(Z21GUIOperationsMixin):
 
         file_path = filedialog.askopenfilename(
             title="Select Locomotive Image",
-            filetypes=[("Image files",
-                        "*.png *.jpg *.jpeg *.gif *.bmp *.tiff"),
-                       ("All files", "*.*")],
+            filetypes=[
+                ("JPEG files", "*.jpg *.jpeg"),
+                ("PNG files", "*.png"),
+                ("Image files", "*.png *.jpg *.jpeg *.gif *.bmp *.tiff"),
+                ("All files", "*.*")
+            ],
         )
         if file_path:
-            self.open_image_crop_window(file_path)
+            # Ensure file_path is a string (filedialog should return str, but be defensive)
+            if not isinstance(file_path, str):
+                file_path = str(file_path) if file_path else ""
+            if file_path:
+                self.open_image_crop_window(file_path)
 
     def update_details(self):
         """Update the details display."""
         if not self.current_loco:
             return
         self.update_overview()
+        # Always update functions - it will handle first-time display correctly
         self.update_functions()
 
     def update_overview(self):
@@ -1058,31 +1095,46 @@ Function Details:  {len(loco.function_details)} available
         self.overview_text.insert(1.0, text)
         self.overview_text.configure(state="disabled")
 
+
     def update_functions(self, is_resize=False):
         """Update functions tab."""
         loco = self.current_loco
-        for widget in self.functions_frame_inner.winfo_children():
-            widget.destroy()
-
-        # Get width from parent frame (functions_frame) which is more reliable
-        # CTkScrollableFrame's winfo_width() may return 1 before it's fully rendered
+        if not loco:
+            return
+        
+        # Check if this is the first time showing Functions tab
+        is_first_show = not hasattr(self, "_functions_tab_shown") or not self._functions_tab_shown
+        current_tab = self.notebook.get() if hasattr(self, 'notebook') else None
+        
+        # If first time showing Functions tab, ensure tab is active and wait for rendering
+        if is_first_show and current_tab == "Functions":
+            # Force tab to be visible and wait for rendering
+            self.root.update_idletasks()
+            self.functions_frame.update_idletasks()
+            self.functions_frame_inner.update_idletasks()
+            # Mark as shown
+            self._functions_tab_shown = True
+            # Clear any cached width to force recalculation
+            if hasattr(self, "_cached_canvas_width"):
+                delattr(self, "_cached_canvas_width")
+            if hasattr(self, "_cached_cols"):
+                delattr(self, "_cached_cols")
+        
+        # Calculate new column count BEFORE destroying widgets
+        # This allows us to skip redraw if nothing changed
         self.root.update_idletasks()
         self.functions_frame.update_idletasks()
-
-        # Check if this is the first call (no cached width) or a resize call
-        is_first_call = not hasattr(
-            self, "_cached_canvas_width") or self._cached_canvas_width <= 100
-
-        if hasattr(self,
-                   "_cached_canvas_width") and self._cached_canvas_width > 100:
-            current_canvas_width = self._cached_canvas_width
-        else:
-            # Try getting width from parent frame first (most reliable)
+        self.functions_frame_inner.update_idletasks()
+        
+        # Get current width and calculate columns
+        # Always get fresh width for resize operations to ensure accurate column count
+        is_first_call = not hasattr(self, "_cached_canvas_width") or self._cached_canvas_width <= 100
+        
+        # For resize operations, always get fresh width to detect window size changes
+        if is_resize:
+            # Force fresh width measurement for resize
             current_canvas_width = self.functions_frame.winfo_width()
-
-            # If parent frame width is not available or too small, try other methods
             if current_canvas_width <= 100:
-                # Try internal canvas of scrollable frame
                 try:
                     canvas = self.functions_frame_inner._parent_canvas
                     canvas.update_idletasks()
@@ -1091,45 +1143,89 @@ Function Details:  {len(loco.function_details)} available
                         current_canvas_width = canvas_width
                 except:
                     pass
-
-            # If still not available, calculate from root window width
             if current_canvas_width <= 100:
                 root_width = self.root.winfo_width()
                 if root_width > 100:
-                    # Approximate: root width - left panel (about 300) - notebook padding (about 20)
-                    current_canvas_width = max(400, root_width - 320)
+                    left_panel_width = self.loco_listbox_frame.master.master.winfo_width() if hasattr(self, 'loco_listbox_frame') else 340
+                    current_canvas_width = max(200, root_width - left_panel_width - 20)
                 else:
-                    current_canvas_width = 800  # Fallback default
-
-            # Ensure minimum reasonable width for function cards
-            if current_canvas_width < 400:
-                current_canvas_width = 800  # Reasonable default
-
-        # Card width including padding (100px card + 10px padding on each side = 110px per column)
-        card_width_with_padding = 110
-        # Add 1 extra column only for resize calls, not for first call
-        base_cols = (current_canvas_width - 40) // card_width_with_padding
-        if is_resize or not is_first_call:
-            cols = max(1, base_cols +
-                       1)  # Add 1 extra column for resize or subsequent calls
+                    current_canvas_width = 400
+        elif hasattr(self, "_cached_canvas_width") and self._cached_canvas_width > 100:
+            # For non-resize, try cached value but verify it's still valid
+            actual_width = self.functions_frame.winfo_width()
+            if actual_width > 100:
+                current_canvas_width = actual_width
+            else:
+                current_canvas_width = self._cached_canvas_width
         else:
-            cols = max(
-                1, base_cols
-            )  # First call: use base calculation without extra column
-        # Debug output (remove in production if needed)
-        if current_canvas_width < 100:
-            print(
-                f"Warning: Width is {current_canvas_width}, using fallback. Root width: {self.root.winfo_width()}, Functions frame width: {self.functions_frame.winfo_width()}"
-            )
-
+            # First call or no cache, get fresh width
+            current_canvas_width = self.functions_frame.winfo_width()
+            if current_canvas_width <= 100:
+                try:
+                    canvas = self.functions_frame_inner._parent_canvas
+                    canvas.update_idletasks()
+                    canvas_width = canvas.winfo_width()
+                    if canvas_width > 100:
+                        current_canvas_width = canvas_width
+                except:
+                    pass
+            if current_canvas_width <= 100:
+                root_width = self.root.winfo_width()
+                if root_width > 100:
+                    left_panel_width = self.loco_listbox_frame.master.master.winfo_width() if hasattr(self, 'loco_listbox_frame') else 340
+                    current_canvas_width = max(200, root_width - left_panel_width - 20)
+                else:
+                    current_canvas_width = 400
+        
+        # Calculate column count based on available width
+        # Use a minimum card width (100px) plus padding (4px total: 2px left + 2px right)
+        # This is used only for calculating how many columns can fit
+        min_card_width_with_padding = 104
+        # Available width: total width minus frame padding and scrollbar space
+        available_width = max(min_card_width_with_padding, current_canvas_width - 20)
+        
+        # Calculate how many complete columns can fit
+        base_cols = available_width // min_card_width_with_padding
+        
+        # Calculate remaining space after fitting base columns
+        remaining_space = available_width % min_card_width_with_padding
+        
+        # Determine final column count
+        # If we have enough space for base_cols columns plus significant remaining space (>=50px),
+        # we can fit one more column
+        if remaining_space >= 50 and base_cols > 0:
+            new_cols = base_cols + 1
+        else:
+            new_cols = base_cols
+        
+        # Ensure at least 1 column and reasonable maximum
+        new_cols = max(1, new_cols)
+        
+        # Debug output (can be enabled for troubleshooting)
+        # print(f"Cols calc: width={current_canvas_width}, available={available_width}, base={base_cols}, remaining={remaining_space}, final={new_cols}")
+        
+        # Check if column count actually changed OR if locomotive changed
+        # We need to update even if column count is the same when locomotive changes
+        old_cols = getattr(self, "_cached_cols", None)
+        old_loco = getattr(self, "_cached_loco_for_functions", None)
+        loco_changed = old_loco != loco
+        
+        # Skip redraw only if column count didn't change AND locomotive didn't change
+        if old_cols == new_cols and not is_first_show and not is_resize and not loco_changed:
+            # Nothing changed, skip redraw to prevent flickering
+            return
+        
+        # Column count changed, locomotive changed, or first show - proceed with redraw
+        for widget in self.functions_frame_inner.winfo_children():
+            widget.destroy()
+        
+        # Use the already calculated values (no need to recalculate)
+        cols = new_cols
+        
+        # Update cache including current locomotive reference
         self._cached_canvas_width = current_canvas_width
         self._cached_cols = cols
-
-        # If width was too small, schedule a recalculation after window is fully rendered
-        if current_canvas_width < 400 and not hasattr(
-                self, "_width_recalc_scheduled"):
-            self._width_recalc_scheduled = True
-            self.root.after(100, self.recalculate_function_layout)
+        self._cached_loco_for_functions = loco  # Store locomotive reference to detect changes
 
         header_label = ctk.CTkLabel(self.functions_frame_inner,
                                     text=f"Functions for {loco.name}",
@@ -1181,6 +1277,25 @@ Function Details:  {len(loco.function_details)} available
         if self.delete_function_button:
             self.delete_function_button.destroy()
             self.delete_function_button = None
+
+        # Configure grid columns BEFORE placing cards
+        # Use weight=1 to allow columns to expand and fill available space evenly
+        # No minsize constraint - let columns adapt to available width
+        # This ensures columns can shrink when window is small (e.g., 3 columns)
+        for i in range(cols):
+            self.functions_frame_inner.grid_columnconfigure(i, weight=1)
+        
+        # Ensure columns beyond cols are not configured (in case cols decreased)
+        # This prevents leftover column configurations from causing layout issues
+        max_configured_cols = getattr(self, "_max_configured_cols", 0)
+        if cols < max_configured_cols:
+            # Clear configuration for columns that are no longer needed
+            for i in range(cols, max_configured_cols):
+                try:
+                    self.functions_frame_inner.grid_columnconfigure(i, weight=0)
+                except:
+                    pass
+        self._max_configured_cols = cols
 
         # Sort by position, then by function number (same as list_locomotives.py)
         sorted_funcs = sorted(loco.function_details.items(),
@@ -1266,17 +1381,14 @@ Function Details:  {len(loco.function_details)} available
                     child.bind("<Double-Button-1>", on_double_click)
 
             make_clickable(card_frame, func_num, func_info, card_frame)
-            card_frame.grid(row=row, column=col, padx=5, pady=5, sticky="nw")
+            # Use sticky="n" to allow horizontal centering but prevent vertical expansion
+            # padx=2 ensures fixed spacing between columns (2px left + 2px right = 4px gap)
+            # This keeps column spacing constant while allowing columns to adapt width
+            card_frame.grid(row=row, column=col, padx=2, pady=5, sticky="n")
             col += 1
             if col >= cols:
                 col = 0
                 row += 1
-
-        # Configure grid columns for proper horizontal layout - ensure columns are properly sized
-        for i in range(cols):
-            self.functions_frame_inner.grid_columnconfigure(i,
-                                                            weight=0,
-                                                            minsize=100)
 
     def select_function(self, func_num: int):
         """Select a function icon and show delete button."""
@@ -1391,7 +1503,8 @@ Function Details:  {len(loco.function_details)} available
         self._last_window_width = current_width
         self._last_window_height = current_height
 
-        # Clear cached width so layout will recalculate
+        # Clear cached width so layout will recalculate with new window size
+        # This ensures functions tab uses the updated right panel width
         if hasattr(self, "_cached_canvas_width"):
             delattr(self, "_cached_canvas_width")
         if hasattr(self, "_cached_cols"):
@@ -1439,27 +1552,30 @@ Function Details:  {len(loco.function_details)} available
         return 128
 
     def get_available_icons(self):
-        """Get list of available icon names."""
-        icon_names = set(self.icon_mapping.keys())
+        """Get list of available icon names - only from icon_mapping.json, ensuring files exist."""
+        icon_names = []
         project_root = Path(__file__).parent.parent
         icons_dir = project_root / "icons"
-        if icons_dir.exists():
-            for icon_file in icons_dir.glob("*.png"):
-                icon_name = icon_file.stem
-                for suffix in [
-                        "_Normal", "_normal", "_On", "_on", "_Off", "_off"
-                ]:
-                    if icon_name.endswith(suffix):
-                        icon_name = icon_name[:-len(suffix)]
-                        break
-                icon_names.add(icon_name)
-
-        common_icons = [
-            "light", "bell", "horn_two_sound", "steam", "whistle_long",
-            "whistle_short", "neutral", "sound1", "horn_high", "couple", "fan",
-            "compressor"
-        ]
-        icon_names.update(common_icons)
+        
+        if not icons_dir.exists():
+            return []
+        
+        # Only use icons from icon_mapping.json - do not scan file system
+        for icon_key, icon_data in self.icon_mapping.items():
+            if isinstance(icon_data, dict):
+                # New format: {"path": "...", "filename": "..."}
+                filename = icon_data.get("filename", "")
+            else:
+                # Old format: just the filename string
+                filename = icon_data if isinstance(icon_data, str) else ""
+            
+            # Only add if the mapped file actually exists
+            if filename:
+                file_path = icons_dir / filename
+                if file_path.exists():
+                    icon_names.append(icon_key)
+        
+        # Return sorted list of only mapped icons that exist
         return sorted(icon_names)
 
     def load_icon_image(self, icon_name: str = None, size: tuple = (80, 80)):
@@ -1511,10 +1627,32 @@ Function Details:  {len(loco.function_details)} available
             return colored_img
 
         if icon_name:
+            # First, try to load from icon_mapping.json
             if icon_name in self.icon_mapping:
-                # ... (Load from mapping) ...
-                pass
-
+                icon_data = self.icon_mapping[icon_name]
+                if isinstance(icon_data, dict):
+                    # New format: {"path": "...", "filename": "..."}
+                    filename = icon_data.get("filename", "")
+                else:
+                    # Old format: just the filename string
+                    filename = icon_data if isinstance(icon_data, str) else ""
+                
+                if filename:
+                    icon_path = icons_dir / filename
+                    if icon_path.exists() and HAS_PIL:
+                        try:
+                            img = Image.open(icon_path)
+                            img = convert_to_black(img)
+                            white_bg = Image.new("RGB", size, color="white")
+                            icon_resized = img.resize(size, Image.LANCZOS)
+                            white_bg.paste(
+                                icon_resized, (0, 0), icon_resized
+                                if icon_resized.mode == "RGBA" else None)
+                            return ctk.CTkImage(light_image=white_bg, size=size)
+                        except Exception:
+                            pass  # Fall through to pattern matching
+            
+            # Fallback: try pattern matching if not in mapping or mapping failed
             icon_patterns = [
                 icon_name, f"{icon_name}_normal.png",
                 f"{icon_name}_Normal.png", f"{icon_name}.png"
@@ -1569,12 +1707,14 @@ Function Details:  {len(loco.function_details)} available
 
     def create_function_card(self, func_num: int, func_info):
         """Create a card widget for a function."""
-        CARD_WIDTH, ICON_SIZE, CARD_PADDING = 100, 80, 5
+        ICON_SIZE, CARD_PADDING = 80, 5
+        # Don't set fixed width - let card adapt to column width
+        # The card will center its content and adapt to available column space
         card_frame = ctk.CTkFrame(self.functions_frame_inner,
                                   border_width=2,
-                                  fg_color="white",
-                                  width=CARD_WIDTH)
-        card_frame.pack_propagate(False)
+                                  fg_color="white")
+        # Allow card to adapt to column width
+        card_frame.pack_propagate(True)
 
         icon_image = self.load_icon_image(func_info.image_name,
                                           (ICON_SIZE, ICON_SIZE))

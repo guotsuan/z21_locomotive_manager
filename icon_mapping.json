@@ -292,6 +292,14 @@
     "stair_light": {
       "path": "icons/stair_light_Normal.png",
       "filename": "stair_light_Normal.png"
+    },
+    "brake_delay": {
+      "path": "icons/brake_delay_Normal.png",
+      "filename": "brake_delay_Normal.png"
+    },
+    "acc_delay": {
+      "path": "icons/acc_delay_Normal.png",
+      "filename": "acc_delay_Normal.png"
     }
   }
 }

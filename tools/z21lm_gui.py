@@ -1457,6 +1457,9 @@ Function Details:  {len(loco.function_details)} available
             self.delete_function_button.destroy()
             self.delete_function_button = None
 
+        # Clear cache to force immediate update of functions view
+        if hasattr(self, '_cached_loco_for_functions'):
+            delattr(self, '_cached_loco_for_functions')
         # Refresh functions display
         self.update_functions()
         self.update_overview()

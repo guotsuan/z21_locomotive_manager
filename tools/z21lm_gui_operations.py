@@ -333,64 +333,6 @@ class Z21GUIOperationsMixin:
             button_frame = ctk.CTkFrame(crop_window)
             button_frame.pack(fill="x", padx=10, pady=10)
 
-            def recognize_text_from_image():
-                try:
-                    orig_x1, orig_y1 = int(crop_rect["x1"] / scale), int(crop_rect["y1"] / scale)
-                    orig_x2, orig_y2 = int(crop_rect["x2"] / scale), int(crop_rect["y2"] / scale)
-                    orig_x1 = max(0, min(orig_x1, img_width))
-                    orig_y1 = max(0, min(orig_y1, img_height))
-                    orig_x2 = max(orig_x1 + 1, min(orig_x2, img_width))
-                    orig_y2 = max(orig_y1 + 1, min(orig_y2, img_height))
-                    
-                    cropped_image = original_image.crop((orig_x1, orig_y1, orig_x2, orig_y2))
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-                        cropped_image.save(tmp_file.name, "PNG")
-                        tmp_path = Path(tmp_file.name)
-
-                    try:
-                        self.status_label.configure(text="Recognizing text from image...")
-                        self.root.update()
-                        extracted_text = self.extract_text_from_file(str(tmp_path))
-                        
-                        if extracted_text:
-                            text_window = ctk.CTkToplevel(crop_window)
-                            text_window.title("Recognized Text")
-                            text_window.geometry("600x400")
-                            text_window.transient(crop_window)
-                            
-                            text_frame = ctk.CTkFrame(text_window)
-                            text_frame.pack(fill="both", expand=True, padx=10, pady=10)
-                            text_widget = scrolledtext.ScrolledText(text_frame, wrap="word", width=70, height=20)
-                            text_widget.pack(fill="both", expand=True)
-                            text_widget.insert(1.0, extracted_text)
-                            text_widget.configure(state="disabled")
-
-                            button_frame_text = ctk.CTkFrame(text_window)
-                            button_frame_text.pack(fill="x", padx=10, pady=10)
-
-                            def copy_text():
-                                text_window.clipboard_clear()
-                                text_window.clipboard_append(extracted_text)
-                                self.set_status_message("Text copied to clipboard!")
-
-                            def fill_fields():
-                                self.parse_and_fill_fields(extracted_text)
-                                text_window.destroy()
-                                self.set_status_message("Fields filled from recognized text!")
-
-                            ctk.CTkButton(button_frame_text, text="Close", command=text_window.destroy).pack(side="right", padx=5)
-                            ctk.CTkButton(button_frame_text, text="Copy", command=copy_text).pack(side="right", padx=5)
-                            ctk.CTkButton(button_frame_text, text="Fill Fields", command=fill_fields).pack(side="right", padx=5)
-                            self.status_label.configure(text=self.default_status_text)
-                        else:
-                            messagebox.showwarning("Warning", "No text could be recognized from the image.")
-                            self.status_label.configure(text=self.default_status_text)
-                    finally:
-                        tmp_path.unlink()
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to recognize text: {e}")
-                    self.status_label.configure(text=self.default_status_text)
-
             def save_cropped_image():
                 try:
                     orig_x1, orig_y1 = int(crop_rect["x1"] / scale), int(crop_rect["y1"] / scale)
@@ -424,10 +366,17 @@ class Z21GUIOperationsMixin:
                 except Exception as e:
                     messagebox.showerror("Error", f"Failed to save cropped image: {e}")
 
-            ctk.CTkButton(button_frame, text="Cancel", command=crop_window.destroy).pack(side="right", padx=5)
-            ctk.CTkButton(button_frame, text="Save", command=save_cropped_image).pack(side="right", padx=5)
-            ctk.CTkButton(button_frame, text="Recognize Text", command=recognize_text_from_image).pack(side="left", padx=5)
-            ctk.CTkLabel(button_frame, text="Drag corners/edges to resize, drag inside to move the crop area", font=("Arial", 9)).pack(side="left", padx=5)
+            # Center the buttons in a container
+            button_container = ctk.CTkFrame(button_frame, fg_color="transparent")
+            button_container.pack(expand=True)
+            ctk.CTkButton(button_container, text="Cancel", command=crop_window.destroy).pack(side="left", padx=5)
+            ctk.CTkButton(button_container, text="Save", command=save_cropped_image).pack(side="left", padx=5)
+            
+            # Status bar with instructions
+            status_bar = ctk.CTkFrame(crop_window)
+            status_bar.pack(fill="x", side="bottom", padx=10, pady=(0, 10))
+            status_label = ctk.CTkLabel(status_bar, text="Drag corners/edges to resize, drag inside to move the crop area", font=("Arial", 10))
+            status_label.pack(pady=5)
 
         except Exception as e:
             import traceback
@@ -562,10 +511,14 @@ class Z21GUIOperationsMixin:
                 return True
             return False
         
-        # Fill name (only if JSON has value and current field is empty)
+        # Fill name (only if JSON has value and current field is empty, 
+        # or if current name is "New locomotive X" - always replace in that case)
         name_value = get_json_value('name')
         if name_value and not is_empty(name_value):
-            if not self.name_var.get().strip():
+            current_name = self.name_var.get().strip()
+            # Check if current name matches "New locomotive X" pattern (case-insensitive)
+            is_new_locomotive_pattern = re.match(r'^New\s+Locomotive\s+\d+$', current_name, re.IGNORECASE)
+            if not current_name or is_new_locomotive_pattern:
                 self.name_var.set(str(name_value))
         
         # Fill address (only if JSON has value and current field is empty)
@@ -581,19 +534,31 @@ class Z21GUIOperationsMixin:
                 except (ValueError, TypeError):
                     pass
         
-        # Fill speed (only if JSON has value and current field is empty)
-        # Support both 'maxSpeed' (camelCase) and 'speed' (snake_case)
-        speed_value = get_json_value('maxSpeed', 'speed')
+        # Fill speed (only if JSON has value and current field is empty or 0)
+        # Support 'Maxspeed', 'maxSpeed' (camelCase), and 'speed' (snake_case)
+        # Try keys directly to ensure we find the value regardless of exact case
+        speed_value = (loco_data.get('Maxspeed') or loco_data.get('maxSpeed') or 
+                      loco_data.get('speed') or loco_data.get('maxspeed'))
         if speed_value and not is_empty(speed_value):
-            if not self.speed_var.get().strip():
+            current_speed = self.speed_var.get().strip()
+            # Import if field is empty or contains "0" (treat 0 as default/unset value)
+            if not current_speed or current_speed == "0":
                 try:
                     speed_str = str(speed_value).strip()
-                    # Remove units like "km/h", "kmh", etc.
-                    speed_str = re.sub(r'\s*(km/h|kmh|mph|km|m/h).*$', '', speed_str, flags=re.IGNORECASE)
-                    if speed_str:
-                        speed = int(float(speed_str))
+                    # Detect unit before removing it to set Speed Display correctly
+                    speed_str_lower = speed_str.lower()
+                    has_mph = bool(re.search(r'\b(mph)\b', speed_str_lower))
+                    # Remove units like "km/h", "kmh", "mph", etc.
+                    speed_str_clean = re.sub(r'\s*(km/h|kmh|mph|km|m/h).*$', '', speed_str, flags=re.IGNORECASE)
+                    if speed_str_clean:
+                        speed = int(float(speed_str_clean))
                         if 0 <= speed <= 300:
                             self.speed_var.set(str(speed))
+                            # Set Speed Display based on detected unit
+                            if has_mph:
+                                self.speed_display_var.set("mph")
+                            else:
+                                self.speed_display_var.set("km/h")
                 except (ValueError, TypeError):
                     pass
         
@@ -2184,9 +2149,18 @@ class Z21GUIOperationsMixin:
                 if self.current_loco_index is not None:
                     self.z21_data.locomotives[self.current_loco_index] = self.current_loco
 
+                dialog.destroy()
+                # Clear cache to force immediate update of functions view
+                if hasattr(self, '_cached_loco_for_functions'):
+                    delattr(self, '_cached_loco_for_functions')
                 self.update_functions()
                 self.update_overview()
-                dialog.destroy()
+                # Switch to Functions tab to show the update immediately
+                if hasattr(self, 'notebook'):
+                    self.notebook.set("Functions")
+                self.root.focus_set()
+                self.root.lift()
+                self.root.update()
                 self.set_status_message(f"Function F{func_num} added successfully!")
             except ValueError as e:
                 messagebox.showerror("Error", f"Invalid input: {e}")
@@ -2363,10 +2337,19 @@ class Z21GUIOperationsMixin:
                 if self.current_loco_index is not None:
                     self.z21_data.locomotives[self.current_loco_index] = self.current_loco
 
-                self.update_functions()
-                self.update_overview()
                 dialog.destroy()
                 self.edit_function_dialog = None  # Clear reference when dialog is closed
+                # Clear cache to force immediate update of functions view
+                if hasattr(self, '_cached_loco_for_functions'):
+                    delattr(self, '_cached_loco_for_functions')
+                self.update_functions()
+                self.update_overview()
+                # Switch to Functions tab to show the update immediately
+                if hasattr(self, 'notebook'):
+                    self.notebook.set("Functions")
+                self.root.focus_set()
+                self.root.lift()
+                self.root.update()
                 self.set_status_message(f"Function F{new_func_num} updated successfully!")
             except ValueError as e:
                 messagebox.showerror("Error", f"Invalid input: {e}")
